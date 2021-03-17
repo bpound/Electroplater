@@ -1,0 +1,31 @@
+The electroplating script is currently located in /home/pi/Desktop/electroplating_source/Electroplating_code.py . It can be edited without issue as long as no libraries from outside the standard library are added.
+
+This is because the electroplating code resides in a python virtual environment. It uses a standalone python shell, completely separate from the system python. This is done so that one can update the raspberry pi and not break the working code, and also so that messing with the python libraries and such in the virtual environment don't break the system.
+
+There are few reasons that you would need to add libraries to the virtual environment. I can really only think of 2:
+1) you need to add a new instrument whose drivers are somehow not already covered by pyvisa, usbtmc, etc ... , which is somewhat unlikely, or
+2) Twilio breaks. In this case you would have to update the libraries and also probably change any Twilio-related code in the script.
+
+If you need to add libraries to the virtual environment, you need to activate it first. This is done :
+1) open terminal
+2) type "source /home/pi/Desktop/electroplating_source/electroplating_source/bin/activate" without quotes and press enter
+3) you should see that the prompt has changed a little bit, with a (electroplating_source) in parenthesis preceding everything.
+4) use pip like normal to add packages; fo instance to install you would use: "pip3 install <package name>", don't type quotes or < >
+5) deactivate the virtual environment by typing "deactivate" in the terminal and pressing enter. the terminal prompt will now go back to normal.
+
+
+Notes on implementation:
+
+Using usbtmc often means that without intervention you would have to run the electroplating script as root which is not needed and a bad idea. So I had to add a udev rule. It is located at /etc/dev/rules.d/55-usbtmc.rules, and has the following lines in it, between "" "":
+""
+# keysight E36105B
+SUBSYSTEMS=="usb", ACTION=="add", ATTRS{idVendor}=="2a8d", ATTRS{idProduct}=="1802", GROUP="usbtmc", MODE="0660"
+KERNEL=="usbtmc/*", MODE="0666", GROUP="usbtmc"
+KERNEL=="usbtmc[0-9]", MODE="0666", GROUP="usbtmc"
+""
+
+The first line corresponds to the actual instrument, the keysight E36150B. If you need to add another usbtmc device, copy the first line (you can do this in this same file) and simply change the idVendor and idProduct values after the == signs.  The Those I got from simply running "lsusb" in the terminal and guessing which usb device it was (these values should only be four characters long), or more rigorously from running "udevadm info -a /dev/usbtmc0" (or usbtmc1 or usbtmc2 ... if there are more than one usbtmc device plugged in) and sifting through the output for the right device. The other two lines that start with "Kernel" should be left alone. Restart the device for the changes to take effect
+
+I then added a group for usbtmc using "sudo groupadd usbtmc" and added the default user, pi, to that group using "sudo usermod -a -G usbtmc pi". Restart the device. This allows the device to be accessed by non-root users.
+
+You should reboot after doing these steps- this is pretty much always the solution when messing around with system files.

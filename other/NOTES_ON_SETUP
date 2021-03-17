@@ -1,0 +1,51 @@
+1) Power cycle syringe pump for each use to clear warnings and such.
+2) Lock the screen. The reason is that if you touch the screen during use, it could screw up the connection. Locking the screen prevents this from happening.
+3) If you need to unlock the screen, the password is 64144.
+4) You can either run the program using the Geany program (edit PS_SP_comb.py in Geany, then press the play button).
+   Or you can open terminal, type python3 /path/to/Electroplating.py
+-- there are some parameters you may want to change. Look in the section below the line that says "if __name__=='__main__:'
+5) Open program before preparing wafer.
+6) The program can set, and you can test, voltages and currents quickly using the menu option 1 (test) and 2(change)
+7) full electroplating program run using option 3.
+8) Can do individual infusion using option 4.
+9) Quit using option 5. This is preferred over simply pressing the "x" on the window because this will tell the power supply to turn off and disconnect properly.
+
+Notes on Linux:
+
+Before you go mucking around in system files, it is ALWAYS a good idea to make a backup copy first. This is done by using the "cp" command. The syntax is "cp file_to_be_backed_up backed_up_file_name" For example, in a later section I will talk about the wpa_supplicant file. To back that file up, you would use the following command: "sudo cp /etc/wpa_supplicant/wpa_supplicant.conf /etc/wpa_supplicant/wpa_supplicant.conf.bak", for example. Now you can mess with the main file, wpa_supplicant.conf, and if you mess things up beyond repair, simply reinstant the backup using the cp command again. "cp /etc/wpa_supplicant/wpa_supplicant.conf.bak /etc/wpa_supplicant/wpa_supplicant.conf".
+
+To upgrade packages and OS: get updated lists (sudo apt update), then upgrade (sudo apt upgrade).
+
+Notes on wireless configuration:
+
+The wireless connection had to be "hacked" to make it work continuously. UCLA_WIFI requires re-authentication  every three hours, so that is not a good solution. UCLA_WEB allows a continuous connection but blocks the ports that allow email, which interferes with the program (the program doesn't crash, but it isn't able to send notifications). This can be overcome by using a VPN, but the UCLA VPN also eventually times out (or so I've been told, I haven't tried it). The only option left was eduroam, which is continuous and doesn't block ports, but which uses WPA Enterprise security, which doens't work on Raspbian Buster (the version of Raspbian that is running right now).
+
+WPA Enterprise was fully supported in Raspbian Stretch, which is a previous version of Raspbian. So I had to downgrade the WiFi driver to the Stretch version. Operationally, that meant uninstalling the WiFi driver ("sudo apt remove wpasupplicant"), editing the /etc/apt/sources.list file to say: "deb http://raspbian.raspberrypi.org/raspbian/ stretch main contrib non-free rpi", pulling the appropriate lists, now from the Stretch repo ("sudo apt update"), instaling wpasupplicant from the Stretch repo ("sudo apt install wpasupplicant"). I then had to put a hold on this package ("sudo apt-mark hold wpasupplicant"). I then put the sources.list back to original ("deb http://raspbian.raspberrypi.org/raspbian/ buster main contrib non-free rpi"), updated the lists which are now from the Buster repo ("sudo apt update"), and upgraded any other packages ("sudo apt full-upgrade"). You should see some notification about a package being held back, the package being wpasupplicant.
+
+Now, if you want to update wpasupplicant for some reason, then it is easy to do so. Be warned that you may screw up the internet connection, and then you'll have to follow the instructions in the previous paragraph. Simply remove the hold (sudo apt-mark unhold wpasupplicant), update lists (sudo apt update), and install any upgrades that are needed (sudo apt full-upgrade).
+
+Note that to get eduroam to work you also need to have an entry, preferably the first entry, for eduroam in the /etc/wpa_supplicant/wpa_supplicant.conf file. The file as it stands right now works, and it says, between the <start> and <end> bookends:
+
+<start program>
+ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+update_config=1
+country=US
+
+network={
+	ssid="eduroam"
+	scan_ssid=1
+	key_mgmt=WPA-EAP
+	auth_alg=OPEN
+	eap=PEAP
+	identity="bpound@ucla.edu"
+	password=hash:7e1b02c5a8379a3ebc323d649193a725
+	phase2="auth=MSCHAPV2"
+}
+<end program>
+
+Note that you may need to change the "identity" field to some vaild UCLA address. You may also need to change the "password" field. You would leave the "password=hash:" part, then simply generate a new hashed password. To do this, open a terminal, and paste the following command into it without quotes: "echo -n my_password | iconv -t UTF-16LE | openssl md4" . The output should be "(stdin)= c5ee93657a8d63700e0310b30cce7800", without quotes. The long non-sensical part is the hashed password that you would copy and paste into the wpa_supplicant.conf file. So to hash your password, simply replace "my_password" in the command with your password, then paste the non-sensical part after "hash:", and that should be all. You could put your password in plaintext, as in "password=my_password", but replacing that with "password=hash:c5ee93657a8d63700e0310b30cce7800" obviously makes it a lot harder for someone to get your UCLA password if they happen upon this file.
+
+
+
+
+

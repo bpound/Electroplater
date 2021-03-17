@@ -1,0 +1,26 @@
+The raspberry pi doesn't like to connect to eduroam by itself for some reason - so you need to hack it.
+
+First, "sudo nano /etc/wpa_supplicant/wpa_supplicant.conf" . Type password if necessary.
+
+Make sure that the following, everything between < ... > but not with the <>, is in the file:
+
+<
+ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+update_config=1
+country=US
+
+network={
+		ssid="eduroam"
+		scan_ssid=1
+		key_mgmt=WPA-EAP
+		auth-alg=OPEN
+		eap=PEAP
+		identity="bpound@ucla.edu"
+		password=<password, or hashed password>
+		phase2="auth=MSCHAPV2"
+	}
+	>
+
+Note that in the password field you put your password instead of < ... >, or you can put a hashed password so that people using this computer can't see your real password. You can do this by creating a hashed password, then putting after the "=" sign, "hash:hashed_password" . You create the hashed password by running the command "echo -n password_here | iconv -t utf16le | openssl md4". The output of this command, minus the "(stdin)= ", is the hashed password.
+
+Note: if the wifi isn't working for some reason, you can try resetting it. Type "wpa_cli -i wlan0". It will bring up an interactive prompt. Type "reconfigure" and press enter. Hopefully it then spits out a whole bunch of stuff and after a few moments you can spot a line that says "EVENT-CONNECTED" - connection to ... completed. You should have internet connection at this point.
