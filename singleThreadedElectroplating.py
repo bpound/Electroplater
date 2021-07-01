@@ -2,7 +2,6 @@
 from datetime import datetime
 from twilio.rest import Client
 import sys,os,time,pyvisa,email, smtplib, ssl
-from matplotlib.animation import FuncAnimation
 from email import encoders
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
@@ -39,27 +38,37 @@ import matplotlib.pyplot as plt
 from tkinter import scrolledtext
 
 class monitorApp(tk.Frame):
+    ## Important problem
+    # Incorporating the pause difference into things inside the loop
+
     def __init__(self,parent,ps,Notify,V_set,I_set,ps_checking_interval,infuseInterval,infuseRate,notifyIntervalMin,
                  sp):
+        tk.Frame.__init__(self,parent,width="100",height="100")
         self.ps = ps
         self.Notify = Notify
         self.vTar = V_set
         self.iTar = I_set
+
+        self.vHigh = 1
+        self.vLow = 1
+
+        self.sp = sp
 
         self.ps_checking_interval = ps_checking_interval
         self.infuseInterval = infuseInterval
         self.infuseRate = infuseRate
         self.notifyIntervalMin = notifyIntervalMin
 
-        tk.Frame.__init__(self,parent,width="400",height="400")
+        self.error_notify_count = 1
+        self.error_notify_cnt_MAX = 8
+
+
+        self.lastNotifyTime = 0
+        self.failLast20Min = 0
+        self.failThreshold = 10
+
         self.timer =  ' '
-        self.label = tk.Label(parent)
-        self.label.pack()
-        self.sbutton=tk.Button(parent,text="Start", command=self.startMonitor)
-        self.sbutton.pack()
-        self.pbutton=tk.Button(parent,text="Pause", command=self.pauseMonitor,
-                               state=tk.DISABLED)
-        self.pbutton.pack()
+
         self.pauseState = 0
         self.fromPause = 0
 
@@ -67,51 +76,176 @@ class monitorApp(tk.Frame):
         self.stopPauseTime = 0
         self.pauseDiff = 0
 
-        self.animation = ''
-
         self.startTime = time.time()
         self.x_data, self.y_data = [], []
         self.tPlot, self.aPlot, self.bPlot = [], [], []
         self.figure = plt.figure()
         self.p1 = self.figure.add_subplot(111)
         self.line1, = plt.plot(self.tPlot, self.aPlot, '-')
-        self.line2, = plt.plot(self.tPlot,self. bPlot, '-')
+        self.line2, = plt.plot(self.tPlot,self.bPlot, '-')
+
+    def __str__(self):
+        return "I am alive, is nice."
+
+    def __repr__(self):
+        return "I am alive, is nice"
+
+    def getParams(self):
+        pass
+
+    def setParams(self):
+        pass
+
+    def getPauseDiff(self):
+        return self.pauseDiff
+
+    def getPauseState(self):
+        return self.pauseState
 
     def startMonitor(self):
-        self.loopThing()
-        self.pbutton['state'] = tk.NORMAL
+        self.ps.run(self.vTar,self.iTar)
+
         self.startTime = time.time()
+        self.oldTime = self.startTime
+        self.lastInfuseTime = time.time()
+        self.nowTime = time.time()
+        self.totalI = 0
+
+        self.loopThing()
 
     def pauseMonitor(self):
         if self.pauseState == 0:
-            self.after_cancel(self.timer)
-            self.animation.event_source.stop()
-            self.pbutton.config(text="Unpause")
             self.pauseState = 1
-
             self.startPauseTime = time.time()
+
+            self.ps.run(0,0)
+
+            self.callback
             return
         if self.pauseState == 1:
-            print(self.startTime)
-            self.loopThing()
-            self.animation.event_source.start()
-            self.pbutton.config(text="Pause")
             self.pauseState = 0
             self.fromPause = 1
 
             self.stopPauseTime = time.time()
 
             self.pauseDiff += self.stopPauseTime - self.startPauseTime
+
+            self.ps.run(self.vTar, self.iTar)
+
+            self.callback
             return
 
     def stopMonitor(self):
+        self.ps.stop()
         # Do some stuff of saving the graph and turning off the power supply
+        st = datetime.now()
+
+        #self.figure.savefig("IV_Plot_",st)
+
+        self.after_cancel(self.callback)
         return
 
     def loopThing(self):
+
+        self.oldTime = self.nowTime
         self.nowTime = time.time()
         toPlotTime = self.nowTime - self.startTime
+
+        # Check if it is time to send a notification
+        tempTimeDelta = self.nowTime - self.lastNotifyTime - self.pauseDiff
+
+        print(tempTimeDelta)
+        # Think about the time that the thing is paused affecting notify time
+        if tempTimeDelta/60 >= self.notifyIntervalMin and self.pauseState == 0:
+            # Check the number of level 1 errors in the last 20 minutes
+            if self.failLast20Min > self.failThreshold:
+                #Send a message
+                msg = "We have X number of level 1 errors"
+                self.Notify.notify()
+                print("Bad notification")
+            else:
+                # Send notification that everything is fine
+                print("Good notificiation")
+
+            self.failLast20 = 0
+
+        #Attempt to read the power supply
+        try: vNew, iNew = self.ps.read_V_I()
+        except:
+            self.failLast20Min = self.failLast20Min + 1
+            print("Failed to get measurment - sleeping and skipping to next iteration hoping that the problem was not fatal")
+
+            if not self.pauseState:
+                ## I'm pretty sure this callback function probably doesn't work like I want it to
+                self.callback = self.after(5000, self.loopThing)
+
+        '''
+        We move the if statements originally a part of the NotifyCSingle class to instead be a part of the monitorAppClass.
+        This is due to the monitorApp class knowing more on the system's timings and already will be reading the power
+        supply in order to draw the graph and such. It makes no sense to continuously pass that into the NotifyCSingle
+        class that's already a part of it. We relegate the NotifyCSingle class now to *exclusively* deal with only 
+        sending notifications  
+        '''
+
+        if ( vNew < self.vLow or vNew > self.vHigh or iNew < (self.iTar-self.iTar*0.1) or iNew > (self.iTar+self.iTar*0.1) ) and self.error_notify_count < self.error_notify_cnt_MAX:
+            if vNew < self.vLow:
+                errorType = "Voltage Low Reading"
+            if vNew < self.vHigh:
+                errorType = "Voltage High Reading"
+
+            if self.error_notify_count == 0:
+                self.error_notify_ref = time.time()
+
+            # Start a notification error timer to prevent spam
+            self.error_notify_timer = (time.time() - self.error_notify_ref) / 60.0
+
+            if self.error_notify_timer > self.error_notify_interval or self.error_notify_count == 0:
+                self.error_notify_count = self.error_notify_count + 1
+
+                # Now we send the info to the NotifyCSingle class here
+                # self.Notify.notify(Blah blah)
+
+
+        # Assumption: Infusion time is max 5 seconds (to not break power supply checking interval)
+        if(self.nowTime - self.lastInfuseTime- self.pauseDiff)/3600.0 > self.infuseInterval and self.pauseState == 0:
+
+            ## Wait should include the pause difference here too?
+            totalT = self.nowTime - self.lastInfuseTime
+
+        # take the total I and divide it by the total time to get the average current over the time period
+            try:
+                I_avg = (self.total_I) / totalT
+            except:
+                I_avg = 0
+
+            # reset the reference timer and total_I
+            self.infuseTimerReference = self.nowTime
+            self.total_I = 0
+
+            # set the infuse parameters and run the pump
+            self.sp.set_parameters(I_avg, self.infuseRate, self.infuseInterval)
+            time.sleep(0.1)
+            self.sp.infuse()
+            time.sleep(0.1)
+
+            # monitor the infusion
+            infused_volume, infuse_rate = self.sp.check_rate_volume(MOTOR_HAS_STALLED)
+            curr_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            new_infusion = '%s : infused %.3f uL replenisher after %.2f hours at %.3f uL/s with %.3f A average current.' % (
+            curr_time, infused_volume, self.infuseInterval, infuse_rate, I_avg)
+
+            if self.sp.use_flag is True:
+                self.sp.infusion_list.append(new_infusion)
+                self.sp.infused_amt_q.put(infused_volume)
+                print("# infusions: ", self.sp.infused_amt_q.qsize())
+
+        else:
+            self.totalI = self.totalI + iNew * (self.nowTime - self.oldTime)
+
         self.tPlot.append(toPlotTime)
+        self.aPlot.append(vNew)
+        self.bPlot.append(iNew)
+
 
         self.line1.set_data(self.tPlot, self.aPlot)
         self.line2.set_data(self.tPlot, self.bPlot)
@@ -129,9 +263,12 @@ class monitorApp(tk.Frame):
         except:
             time_axis_title = "Time (s)"
 
+        plt.legend(['Voltage', 'Current'])
         plt.xlabel(time_axis_title)
 
-        self.timer = self.after(1000, self.loopThing)
+        print("Looped")
+        self.callback = self.after(5000, self.loopThing)
+
 
 class CreateToolTip(object):
     def __init__(self, widget, text='widget info'):
@@ -353,7 +490,31 @@ class NotifyCSingle():
         return
 
     # Probably where most of the things will need to be changed
-    def notify(self, V_new, I_new, notify_list, msg, infused_amt_q):
+    def notify(self, V_new, I_new, notify_list, msg, infused_amt_q,typeD):
+        '''
+
+        :param V_new:
+        :param I_new:
+        :param notify_list:
+        :param msg:
+        :param infused_amt_q:
+        :param typeD:
+        :return:
+
+        This function will need to rewritten slightly such that instead of checking the power supply values within it,
+        it will rely on cases sent from the monitorApp Class to determine what message to send. For simplicity, we'll
+        use strings for the cases:
+
+        "fine"
+        "Voltage Low Reading"
+        "Voltage High Reading"
+        "Reading Failed"
+        "Threshold reached"
+
+        It'll probably be best to create a bunch of switch statements
+
+        '''
+
 
         # unpack list
         # Totally forgot what this notify list is supposed to do
@@ -373,7 +534,7 @@ class NotifyCSingle():
         self.infused_volume = infused_vl
 
 
-        ## construct message based on V value
+        # construct message based on V value
         # These bounds need to change somehow
         # Tests if the read voltage value is above or below our set boundaries or the target current is greater
         # than 10% away from the target
@@ -396,25 +557,25 @@ class NotifyCSingle():
 
                 self.error_notify_count = self.error_notify_count + 1
 
-                emailBody = '%s. ERROR-%s.%s Warn %d. V: %.3f V, I: %.3f A. Inf: %.3f uL.' % (
-                    current_date_time, typeD, self.msg, self.error_notify_count,V_new, I_new, infused_vl)
-                print(emailBody)
+            emailBody = '%s. ERROR-%s.%s Warn %d. V: %.3f V, I: %.3f A. Inf: %.3f uL.' % (
+                current_date_time, typeD, self.msg, self.error_notify_count,V_new, I_new, infused_vl)
+            print(emailBody)
 
-                if self.notifyType in [1, 3]:
-                    try:
-                        self.notify_textmessage(emailBody)
-                    except:
-                        print(
-                            'Could not *bad* notify via text message - continuing and hoping that the error was not fatal.')
+            if self.notifyType in [1, 3]:
+                try:
+                    self.notify_textmessage(emailBody)
+                except:
+                    print(
+                        'Could not *bad* notify via text message - continuing and hoping that the error was not fatal.')
 
-                if self.notifyType in [2, 3]:
-                    try:
-                        self.notify_email(emailBody)
-                    except:
-                        print('Could not *bad* notify via email - continuing and hoping that the error was not fatal.')
+            if self.notifyType in [2, 3]:
+                try:
+                    self.notify_email(emailBody)
+                except:
+                    print('Could not *bad* notify via email - continuing and hoping that the error was not fatal.')
 
-                # After we send a message, create
-                self.error_notify_ref = time.time()
+            # After we send a message, create
+            self.error_notify_ref = time.time()
 
             self.msg = ''
 
@@ -943,6 +1104,8 @@ def menu():
     #################################
     ## PUT OAUTH STUFF BACK IN HERE
 
+
+
     error_notify_cnt_MAX = 100
     notifyType = 2
     use_text_only_for_bad_news = True
@@ -998,7 +1161,6 @@ def menu():
     buttonDef = [10, 10, 14, 1]  # padx,pady,width,height
     gridPadDef = [10, 10]
 
-
     #### Initialize NotifyC class with default parameters ####
 
     NotifyObject = NotifyCSingle(SID,AUTH,TO_NUM,FROM_NUM,[0.02,18],cur_def,error_notify_interval_def,
@@ -1014,8 +1176,6 @@ def menu():
 
     voltage_frame = tk.LabelFrame(root, text="Voltage", padx=labelFramePadDef[0], pady=labelFramePadDef[1])
     voltage_frame.pack()
-
-
 
     # create string variables to store Voltage text box contents
     vTarget = tk.StringVar(voltage_frame, str(volt_def[0]))
@@ -1145,19 +1305,24 @@ def menu():
 
     runButton = tk.Button(IVButtonFrame, bd=1, text="Run Electroplating", padx=buttonDef[0], pady=buttonDef[1],
                           width=buttonDef[2], height=buttonDef[3])
-
     runButton.grid(row=1, column=0, padx=gridPadDef[0], pady=gridPadDef[1])
 
     stopButton = tk.Button(IVButtonFrame, bd=1, text="Stop", padx=buttonDef[0], pady=buttonDef[1],
                            width=buttonDef[2], height=buttonDef[3])
-    stopButton.config(command=lambda: emergencyStop())
+    stopButton['state'] = tk.DISABLED
+
     stopButton.grid(row=1, column=1, padx=gridPadDef[0], pady=gridPadDef[1])
+
+    pauseButton = tk.Button(IVButtonFrame, bd=1, text="Pause", padx=buttonDef[0], pady=buttonDef[1],
+                           width=buttonDef[2], height=buttonDef[3])
+    pauseButton['state'] = tk.DISABLED
+
+    pauseButton.grid(row=0, column=1, padx=gridPadDef[0], pady=gridPadDef[1])
 
     infuseButton = tk.Button(IVButtonFrame,bd=1,text="Run Infusion",padx=buttonDef[0], pady=buttonDef[1],
                           width=buttonDef[2], height=buttonDef[3])
-    infuseButton.config(command=lambda: runInfusion())
-    infuseButton.grid(row=0,column=1)
 
+    infuseButton.grid(row=2,column=0,columnspan=2)
     ###########################
 
     #### Make main output Console ####
@@ -1321,13 +1486,7 @@ def menu():
     psVar = tk.StringVar()
     ps_ident = 0 #NOTE: This may need to be moved up later on
 
-    ## List of variables that need to be initialized first cause I don't wanna have to rewrite a bunch of code
-    #sp_port
-    #s_manufacturer DONE
-    #s_volume DONE
-    #force DONE
-    #use_syringe_pump
-
+    ps = []
 
     def initWindow(ps_ident):
         initWin = tk.Toplevel()
@@ -1335,7 +1494,7 @@ def menu():
         initFrame = tk.Frame(initWin)
         initFrame.pack()
 
-        finishInit = tk.Button(initFrame, text="Initialize", command=lambda: initDoneSwitch(initWin,ps_ident))
+        finishInit = tk.Button(initFrame, text="Initialize", command=lambda: initDoneSwitch(initWin,ps_ident,ps))
         finishInit.grid(row=10,column=0,pady=10,padx=10,columnspan=3)
 
         psOptionLabel = tk.Label(initFrame,textvariable=tk.StringVar(initFrame,"Choose a power supply"),height=2, padx=labelPadXDef)
@@ -1344,15 +1503,12 @@ def menu():
         psOption.config(width=20,height=2)
         psOption.grid(row=1, column=0, columnspan=3)
 
-        # forceInitLabel = tk.Label(initFrame, textvariable=tk.StringVar(initFrame, "Syringe Force"), height=2,padx=labelPadXDef)
-        # forceInitLabel.grid(row=2,column=0)
-        # forceInitBox = tk.Entry(initFrame, text="Low Warning", textvariable=syringeForce, width=8, justify="center")
-        # forceInitTip = CreateToolTip(forceInitBox, \
-        #                            "Sets an initial force value to initialize the pump with (can be changed later")
-        # forceInitBox.grid(row=3, column=0,pady=2)
         return
 
-    def initDoneSwitch(breakThis,ps_ident):
+    monitorAppObject = []
+    print(monitorAppObject)
+
+    def initDoneSwitch(breakThis,ps_ident,ps):
         if psVar.get() == "":
             print("Please select a power supply")
             return
@@ -1368,23 +1524,116 @@ def menu():
             ps_ident = 1
             ps_port = 'ASRL/dev/ttyUSB0::INSTR'
             channel = 8
-            ps = E3631A_PS(channel, ps_port, ps_ident)
+            ps.append(E3631A_PS(channel, ps_port, ps_ident))
         elif  psVar.get() == "Agilent E3634A":
             ps_ident = 2
             ps_port = 'ASRL/dev/ttyUSB0::INSTR'
             channel = 5
-            # ps = E3634A_PS(channel, ps_port, ps_ident)
+            ps.append(E3634A_PS(channel, ps_port, ps_ident))
         elif psVar.get() == "Keysight E36105B":
             ps_ident = 3
             ps_port = 'USB::10893::6146::MY59001199::INSTR'
             channel = None  # not needed for this power supply and usbtmc interface
-            # ps = E36105B_PS(channel, ps_port, ps_ident)
+            ps.append(E36105B_PS(channel, ps_port, ps_ident))
         print(ps_ident)
         # Make label for currently used power supply
         curPS = tk.Label(voltage_frame, text="Current Power supply: " + psVar.get(), height=2, padx=labelPadXDef)
         curPS.grid(row=4,column=0,columnspan=3)
+        createMonitor(monitorAppObject)
+
+    monitorAppFrame = tk.Frame()
+
+    def createMonitor(monitorAppObject):
+         try:
+            monitorAppObject.append(monitorApp(monitorAppFrame,ps[0],NotifyObject,volt_def,cur_def,check_interval_def,infuse_interval_def,infuse_rate_def,notify_interval_def,SyringeObject))
+            print("Somehow actually created the monitorApp object... huh")
+
+            #infuseButton.config(command=lambda: runInfusion())
+         except:
+            print("Could not create monitorApp class, shutting down")
+            exit(2)
+
+    #### Initialize monitorApp class ####
+
 
     initWindow(ps_ident)
+
+    def testVI():
+        ps[0].run(vTargetBox.get(),iBox.get())
+
+        startTime = time.time()
+        nowTime = startTime
+
+        tPlot, aPlot, bPlot = [], [], []
+        figure = plt.figure()
+        line1, = plt.plot(tPlot, aPlot, '-')
+        line2, = plt.plot(tPlot,bPlot, '-')
+
+        while nowTime-startTime <= 10:
+            nowTime = time.time()
+            try: vNew,iNew = ps[0].read_V_I()
+            except:
+                print("Could not read the power supply for 10 seconds.")
+
+            toPlotTime = nowTime - startTime
+
+            tPlot.append(toPlotTime)
+            aPlot.append(vNew)
+            bPlot.append(iNew)
+
+            try:
+                # total elapsed time in hh:mm:ss
+                hr, rem = divmod(tPlot[-1] - tPlot[0], 3600)
+
+                mins, sec = divmod(rem, 60)
+                time_axis_title = "Time (s): Elapsed time is {:0>2} hours, {:0>2} minutes, {:d} seconds".format(int(hr),
+                                                                                                                int(
+                                                                                                                    mins),
+                                                                                                                int(
+                                                                                                                    sec))
+            except:
+                time_axis_title = "Time (s)"
+
+            line1.set_data(tPlot,aPlot)
+            line2.set_data(tPlot,bPlot)
+            figure.gca().relim()
+            figure.gca().autoscale_view()
+
+            plt.legend(['Voltage', 'Current'])
+            plt.xlabel(time_axis_title)
+            time.sleep(1)
+
+
+    def startElectroplating():
+        stopButton['state'] = tk.NORMAL
+        pauseButton['state'] = tk.NORMAL
+
+        runButton['state'] = tk.DISABLED
+
+        monitorAppObject[0].startMonitor()
+
+    def stopElectroplating():
+        stopButton['state'] = tk.DISABLED
+        pauseButton['state'] = tk.DISABLED
+
+        runButton['state'] = tk.NORMAL
+
+        monitorAppObject[0].stopMonitor()
+
+    def pauseElectroplating():
+        if monitorAppObject[0].getPauseState() == 0:
+            pauseButton.config(text = "Unpause")
+            monitorAppObject[0].pauseMonitor()
+            return
+        if monitorAppObject[0].getPauseState() == 1:
+            pauseButton.config(text = "Pause")
+            monitorAppObject[0].pauseMonitor()
+            return
+
+    runButton.config(command=lambda: startElectroplating())
+    stopButton.config(command=lambda: stopElectroplating())
+    pauseButton.config(command=lambda: monitorAppObject[0].pauseMonitor())
+
 
     root.mainloop()
 
