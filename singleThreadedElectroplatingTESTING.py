@@ -7,13 +7,10 @@ import matplotlib.pyplot as plt
 
 import base64
 import logging
-import mimetypes
 import os
 import os.path
 import pickle
-import uuid
-import threading
-
+import random
 
 #import board
 import busio
@@ -21,12 +18,10 @@ import busio
 #from adafruit_ads1x15.analog_in import AnalogIn
 
 
-import cgi,html
-import uuid
+
 from email.mime.multipart import MIMEMultipart
 from email.mime.text      import MIMEText
 from email.mime.image     import MIMEImage
-from email.header         import Header
 
 
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -72,6 +67,8 @@ class O2_Sensor():
 
         # number of reads to do during calibration
         self.numReads = numReads
+
+        self.startO2 = 50 # Percentage of O2 at start of simulation.
 
     def updateNumReads(self,numReads):
         self.numReads = numReads
@@ -161,8 +158,8 @@ class monitorApp(tk.Frame):
         ## Parameters for the power supply
         self.vTar = V_set[0]
         self.iTar = I_set
-        self.vHigh = V_set[1]
-        self.vLow = V_set[2]
+        self.vHigh = V_set[2]
+        self.vLow = V_set[1]
         self.ps_checking_interval = ps_checking_interval ## MAIN Time interval for a lot of the code, a lot of other
                                                          ## actions will be dependent on this (def: 5)
 
@@ -188,7 +185,7 @@ class monitorApp(tk.Frame):
         self.lastStandardNotifyTime = 0 # Last STANDARD notification time
         self.lastErrorNotifyTime = 0
         self.failLast20Min = 0
-        self.failLast20Threshold = 10
+        self.failLast20Threshold = 20
 
         ## Parameters for internal timing
         self.startTime = time.time()
@@ -297,9 +294,14 @@ class monitorApp(tk.Frame):
 
         self.startTime = time.time()
         self.oldTime = self.startTime
-        self.lastInfuseTime = time.time()
-        self.nowTime = time.time()
+        self.lastInfuseTime = self.startTime
+        self.lastStandardNotifyTime = self.startTime
+        self.lastErrorNotifyTime = self.startTime
+        self.nowTime = self.startTime
         self.totalI = 0
+
+        self.vOld = self.vTar
+        self.iOld = self.iTar
 
         self.loopThing()
 
@@ -355,7 +357,6 @@ class monitorApp(tk.Frame):
 
         # Check if it is time to send a notification
         tempTimeDelta = self.nowTime - self.lastStandardNotifyTime - self.pauseDiff
-        print(tempTimeDelta)
 
         tempInfusedamtq = 0
 
@@ -394,23 +395,34 @@ class monitorApp(tk.Frame):
         ### Check if we need to close or open the solenoid
         # Read 02 sensor
 
-        if self.platingType == "PERMALLOY" and self.useSolenoidandOxy:
-            newVOxy, newO2 = self.OxySensor.read_O2_conc()
-            # if 02 > 2%
-            if newO2 > self.solenoidHighBound:
-                #   Run open solenoid
-                self.Solenoid.open_solenoid()
-                self.solenoidStartTime = time.time()
-            # if 02 < 0.5% or ran for more than 5 minutes
-            if newO2 < self.solenoidLowBound or self.nowTime - self.solenoidStartTime / 60.0 > 5:
-                #   Run close solenoid
-                self.Solenoid.close_solenoid()
+        # if self.platingType == "PERMALLOY" and self.useSolenoidandOxy:
+        #     newVOxy, newO2 = self.OxySensor.read_O2_conc()
+        #     # if 02 > 2%
+        #     if newO2 > self.solenoidHighBound:
+        #         #   Run open solenoid
+        #         self.Solenoid.open_solenoid()
+        #         self.solenoidStartTime = time.time()
+        #     # if 02 < 0.5% or ran for more than 5 minutes
+        #     if newO2 < self.solenoidLowBound or self.nowTime - self.solenoidStartTime / 60.0 > 5:
+        #         #   Run close solenoid
+        #         self.Solenoid.close_solenoid()
 
         successfulRead = True
-        timeErrorDelta = self.nowTime - self.lastErrorNotifyTime
+        timeErrorDelta = self.nowTime - self.lastErrorNotifyTime - self.pauseDiff
+
+        print("")
+        print("Now Time: " + str(self.nowTime))
+        print("Old Time: " + str(self.oldTime))
+        print("Last Error Notification: " + str(self.lastErrorNotifyTime))
+        print("tempTimeDelta: " + str(tempTimeDelta))
+
+
         if self.pauseState == 0:
             try: vNew, iNew = self.ps.read_V_I()
             except:
+                vNew = self.vOld
+                iNew = self.iOld
+
                 self.failLast20Min = self.failLast20Min + 1
                 successfulRead = False
                 print("Failed to get measurment - sleeping and skipping to next iteration hoping that the problem was not fatal")
@@ -422,86 +434,106 @@ class monitorApp(tk.Frame):
                     # NOTIFY CASE: FAIL THRESHOLD REACHED
                     pass
 
+        self.vOld = vNew
+        self.iOld = iNew
+
+        print("Time since last error message (min): " + str(timeErrorDelta))
+
+        print("Fail last 20 min: " + str(self.failLast20Min))
+        print("Current out of bounds? " + str(iNew < (self.iTar - self.iTar * 0.1) or iNew > (self.iTar + self.iTar * 0.1)))
+
         if successfulRead == True and self.pauseState == 0:
+            if self.failLast20Min > self.failLast20Threshold:
+                self.Notify.notify("Fail Threshold Reached",vNew,iNew,tempInfusedamtq,'',[0, 0],self.failLast20Min)
+
             if tempTimeDelta / 60 >= 20 and self.pauseState == 0:
                 self.lastStandardNotifyTime = time.time()  # Place a time new reference to create notifications from
                 self.failLast20Min = 0
-                self.Notify.notify("Standard", vNew, iNew, tempInfusedamtq, '', [0, 0])
+                self.Notify.notify("Standard", vNew, iNew, tempInfusedamtq, '', [0, 0],self.failLast20Min)
+
                 # NOTIFY CASE: STANDARD CASE
 
             if tempTimeDelta / 60 >= self.okNotifyIntervalMin and self.pauseState == 0:
+                self.lastStandardNotifyTime = time.time()
                 # NOTIFY CASE: STANDARD 20 MIN
-                self.Notify.notify("Standard", vNew, iNew, tempInfusedamtq, '', [0, 0])
-
-                self.failLast20 = 0
+                self.Notify.notify("Standard", vNew, iNew, tempInfusedamtq, '', [0, 0],self.failLast20Min)
+                self.failLast20Min = 0
 
             if vNew > self.vHigh or vNew < self.vLow:
-                self.failLast20Min = self.failLast20Min + 1
                 if self.failLast20Min == 0:  # Send a notification error for the first time in 20 minutes regardless
                     # NOTIFY CASE: VOLTAGE OUT OF BOUNDS
-                    self.Notify.notify("Voltage Out of Bounds", vNew, iNew, tempInfusedamtq, '', [0, 0])
+                    self.lastErrorNotifyTime = time.time()
+                    print("Sending 1st Out of Bounds Message")
+                    self.Notify.notify("Voltage Out of Bounds", vNew, iNew, tempInfusedamtq, '', [0, 0],self.failLast20Min)
                     pass
-                if tempTimeDelta-self.lastErrorNotifyTime/60 >= self.errorNotifyInterval:
+                if (self.nowTime-self.lastErrorNotifyTime)/60 >= self.errorNotifyInterval:
                     # NOTIFY CASE: VOLTAGE OUT OF BOUNDS
-                    self.Notify.notify("Voltage Out of Bounds", vNew, iNew, tempInfusedamtq, '', [0, 0])
+                    print("Sending 2nd+ Out of Bounds Message")
+                    self.Notify.notify("Voltage Out of Bounds", vNew, iNew, tempInfusedamtq, '', [0, 0],self.failLast20Min)
+                    self.lastErrorNotifyTime = time.time()
                     pass
+                self.failLast20Min = self.failLast20Min + 1
 
             if iNew < (self.iTar - self.iTar * 0.1) or iNew > (self.iTar + self.iTar * 0.1):
-                self.failLast20Min = self.failLast20Min + 1
+
+                self.lastErrorNotifyTime = time.time()
                 if self.failLast20Min == 0:
                     # NOTIFY CASE: CURRENT OUT OF BOUNDS
-                    self.Notify.notify("Current Out of Bounds", vNew, iNew, tempInfusedamtq, '', [0, 0])
+                    self.lastErrorNotifyTime = time.time()
+                    self.Notify.notify("Current outside range", vNew, iNew, tempInfusedamtq, '', [0, 0],self.failLast20Min)
                     pass
-                if tempTimeDelta-self.lastErrorNotifyTime/60 >= self.errorNotifyInterval:
+                if (self.nowTime-self.lastErrorNotifyTime)/60 >= self.errorNotifyInterval:
                     # NOTIFY CASE: CURRENT OUT OF BOUNDS
-                    self.Notify.notify("Current Out of Bounds", vNew, iNew, tempInfusedamtq, '', [0, 0])
+                    self.lastErrorNotifyTime = time.time()
+                    self.Notify.notify("Current outside range", vNew, iNew, tempInfusedamtq, '', [0, 0],self.failLast20Min)
                     pass
+                self.failLast20Min = self.failLast20Min + 1
 
         # RUN IF COPPER ONLY. TURN OFF FOR PERMALLOY
         # Assumption: Infusion time is max 5 seconds (to not break power supply checking interval)
         # Check if it is time to run the infusion (ONLY WHEN WE ARE DOING... nickel?)
 
-        if (self.nowTime - self.lastInfuseTime- self.pauseDiff)/3600.0 > 1:
-            self.doReplenishment = True
-
-        if self.platingType == "COPPER":
-            # After 1 hours, do replenishment
-                # Turn on flag to send replenishment status updates
-            if self.doReplenishment == True and (self.nowTime - self.lastInfuseTime - self.pauseDiff)/3600.0 > self.infuseInterval and self.pauseState == 0:
-                self.sendReplenishUpdates = True
-                self.lastReplenishUpdateTime = self.nowTime
-                
-                
-                totalT = self.nowTime - self.lastInfuseTime - self.pauseDiff
-
-            # take the total I and divide it by the total time to get the average current over the time period
-                try:
-                    I_avg = (self.total_I) / totalT
-                except:
-                    I_avg = 0
-
-                # reset the reference timer and total_I
-                self.total_I = 0
-
-                # set the infuse parameters and run the pump
-                self.sp.set_parameters(I_avg, self.infuseRate, self.infuseInterval)
-                time.sleep(0.1)
-                self.sp.infuse()
-                time.sleep(0.1)
-            else:
-                self.totalI = self.totalI + iNew * (self.nowTime - self.oldTime)
-
-            # After we have finished the number of infusions we want, we now monitor it
-            # if sendReplenish Updates flag is true
-            if (self.sendReplenishUpdates == True and (self.nowTime - self.lastReplenishUpdateTime - self.pauseDiff)/3600.0 > self.replenishUpdateInterval):
-                infused_volume, infuse_rate = self.sp.check_rate_volume()
-                curr_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                new_infusion = '%s : infused %.3f uL replenisher after %.2f hours at %.3f uL/s with %.3f A average current.' % (
-                    curr_time, infused_volume, self.infuseInterval, infuse_rate, I_avg)
-
-                if self.sp.use_flag is True: #Check what use_flag does
-                    self.sp.infusion_list.append(new_infusion)
-                    print("# infusions: ", len(self.sp.infusion_list))
+        # if (self.nowTime - self.lastInfuseTime- self.pauseDiff)/3600.0 > 1:
+        #     self.doReplenishment = True
+        #
+        # if self.platingType == "COPPER":
+        #     # After 1 hours, do replenishment
+        #         # Turn on flag to send replenishment status updates
+        #     if self.doReplenishment == True and (self.nowTime - self.lastInfuseTime - self.pauseDiff)/3600.0 > self.infuseInterval and self.pauseState == 0:
+        #         self.sendReplenishUpdates = True
+        #         self.lastReplenishUpdateTime = self.nowTime
+        #
+        #
+        #         totalT = self.nowTime - self.lastInfuseTime - self.pauseDiff
+        #
+        #     # take the total I and divide it by the total time to get the average current over the time period
+        #         try:
+        #             I_avg = (self.total_I) / totalT
+        #         except:
+        #             I_avg = 0
+        #
+        #         # reset the reference timer and total_I
+        #         self.total_I = 0
+        #
+        #         # set the infuse parameters and run the pump
+        #         self.sp.set_parameters(I_avg, self.infuseRate, self.infuseInterval)
+        #         time.sleep(0.1)
+        #         self.sp.infuse()
+        #         time.sleep(0.1)
+        #     else:
+        #         self.totalI = self.totalI + iNew * (self.nowTime - self.oldTime)
+        #
+        #     # After we have finished the number of infusions we want, we now monitor it
+        #     # if sendReplenish Updates flag is true
+        #     if (self.sendReplenishUpdates == True and (self.nowTime - self.lastReplenishUpdateTime - self.pauseDiff)/3600.0 > self.replenishUpdateInterval):
+        #         infused_volume, infuse_rate = self.sp.check_rate_volume()
+        #         curr_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        #         new_infusion = '%s : infused %.3f uL replenisher after %.2f hours at %.3f uL/s with %.3f A average current.' % (
+        #             curr_time, infused_volume, self.infuseInterval, infuse_rate, I_avg)
+        #
+        #         if self.sp.use_flag is True: #Check what use_flag does
+        #             self.sp.infusion_list.append(new_infusion)
+        #             print("# infusions: ", len(self.sp.infusion_list))
 
         ## Add the new voltage and current readings into the plot
         self.tPlot.append(toPlotTime)
@@ -657,7 +689,7 @@ class NotifyCSingle():
         SCOPES = [
             'https://www.googleapis.com/auth/gmail.readonly',
             'https://www.googleapis.com/auth/gmail.send',
-        ]
+]
 
         creds = None
         # The file token.pickle stores the user's access and refresh tokens, and is
@@ -751,7 +783,7 @@ class NotifyCSingle():
         return
 
     # Probably where most of the things will need to be changed
-    def notify(self,case,vNew,iNew,infused_amt_q,msg,notify_list):
+    def notify(self,case,vNew,iNew,infused_amt_q,msg,notify_list,failLast20):
         '''
 
         :param V_new:
@@ -791,26 +823,27 @@ class NotifyCSingle():
         current_date_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
         # get infused volume
-        infused_vl = self.infused_volume
-        for ii in range(infused_amt_q.qsize()):
-            infused_vl = infused_vl + infused_amt_q.get()
-        self.infused_volume = infused_vl
+        # infused_vl = self.infused_volume
+        # for ii in range(infused_amt_q.qsize()):
+        #     infused_vl = infused_vl + infused_amt_q.get()
+        # self.infused_volume = infused_vl
+        infused_v1 = 85
 
         if case == "Standard":
-            emailBody = '%s. Good.%s V: %.3f V, I: %.3f .A Inf: %.3f uL.' % (
-                current_date_time, self.msg, vNew, iNew, infused_vl)
+            emailBody = '%s. Good.%s V: %.3f V, I: %.3f .A Inf: %.3f uL. Fails Last 20 minutes: %.3f' % (
+                current_date_time, self.msg, vNew, iNew, infused_v1,failLast20)
             pass
         if case == "Voltage Out of Bounds":
             emailBody = '%s. Voltage Out of Bounds.%s V: %.3f V, I: %.3f .A Inf: %.3f uL.' % (
-                current_date_time, self.msg, vNew, iNew, infused_vl)
+                current_date_time, self.msg, vNew, iNew, infused_v1)
             pass
         if case == "Current outside range":
             emailBody = '%s. Current Out of Range.%s V: %.3f V, I: %.3f .A Inf: %.3f uL.' % (
-                current_date_time, self.msg, vNew, iNew, infused_vl)
+                current_date_time, self.msg, vNew, iNew, infused_v1)
             pass
         if case == "Reading Failed":
-            emailBody = '%s. ERROR-%s.%s Warn %d. V: %.3f V, I: %.3f A. Inf: %.3f uL.' % (
-                current_date_time, self.msg, self.error_notify_count, vNew, iNew, infused_vl)
+            emailBody = '%s. ERROR-%s. Warn %d. V: %.3f V, I: %.3f A. Inf: %.0f uL.' % (
+                current_date_time, self.msg, self.error_notify_count, vNew, iNew, infused_v1)
             print(emailBody)
         if case == "Fail Threshold Reached":
             emailBody = "Reached more than 20 errors in the last 20 minutes. Most likely due to a problem with the power supply at this point"
@@ -828,11 +861,11 @@ class NotifyCSingle():
 
 
         # Get a screenshot the the system?
-        fn = os.getcwd() + '/screenshot.png'
-        os.system('scrot %s -q 75' % fn)
+        # fn = os.getcwd() + '/screenshot.png'
+        # os.system('scrot %s -q 75' % fn)
 
-        pathToScreenshot = fn
-        nameScreenshot = "screenshot.png"
+        pathToScreenshot = "C:\\Users\\Thomas Sison\\Pictures"
+        nameScreenshot = "IdahoCry.png"
         img1 = dict(title='desktop screenshot', path=os.path.join(pathToScreenshot, nameScreenshot))
 
         try:
@@ -844,7 +877,10 @@ class NotifyCSingle():
             message = self.create_message(self.fromEmail, self.toEmail, "Test subject", emailBody, img1)
         except:
             print("Could not create the test message")
-        self.send_message(service, self.fromEmail, message)
+        try:
+            self.send_message(service, self.fromEmail, message)
+        except:
+            print("Could not send message, continuing and hoping that the error is not fatal")
 
         return [notify_time_ref, notify_time]
 
@@ -856,64 +892,85 @@ class E3631A_PS():
         self.ident = ps_ident
 
         # open up Resource Manager
-        rm = pyvisa.ResourceManager('@py')
+        # rm = pyvisa.ResourceManager('@py')
 
         # open up the right channel
         # the USB resource needs to be figured out beforehand, there is no way to figure out which power supply is
-        try:
-            ps = rm.open_resource(ps_port)
 
-            # set address and protocol
-            ps.write('++addr %i' % channel)
-            ps.write('++eos 0')
-            time.sleep(0.01)
+        self.startI = -8
+        self.startV = -8
 
-            # try to get a response from power supply, in this case its identity
-            ps.write('*IDN?')
-            ps.write('++read')
-            print('Power supply identity: %s , %s' % (ps_port, ps.read().strip()))
-
-            # save communication instance into class variable
-            self.ps = ps
-        except:
-            print('Something went wrong with power supply initialization.')
-            self.ps = None
+        # try:
+        #     # ps = rm.open_resource(ps_port)
+        #     #
+        #     # # set address and protocol
+        #     # ps.write('++addr %i' % channel)
+        #     # ps.write('++eos 0')
+        #     # time.sleep(0.01)
+        #     #
+        #     # # try to get a response from power supply, in this case its identity
+        #     # ps.write('*IDN?')
+        #     # ps.write('++read')
+        #     # print('Power supply identity: %s , %s' % (ps_port, ps.read().strip()))
+        #     #
+        #     # # save communication instance into class variable
+        #     # self.ps = ps
+        # except:
+        #     print('Something went wrong with power supply initialization.')
+        #     self.ps = None
 
     def run(self, V, I):
 
-        if self.ps is not None:
+        # if self.ps is not None:
+
+            self.startI = I
+            self.startV = V
+
+            self.lastI = self.startI
+            self.lastV = self.startV
+
             # take output off, set new voltage and current, then turn output back on
             # ps.write('OUTPUT OFF')
-            self.ps.write('APPL P6V, %f, %f' % (V, I))
-
-            # check if output is already on
-            self.ps.write('OUTPUT?')
-            self.ps.write('++read')
-            on_flag = self.ps.read().strip()
-
-            if on_flag == '0':
-                self.ps.write('OUTPUT ON')
+            # self.ps.write('APPL P6V, %f, %f' % (V, I))
+            #
+            # # check if output is already on
+            # self.ps.write('OUTPUT?')/
+            # self.ps.write('++read')
+            # on_flag = self.ps.read().strip()
+            #
+            # if on_flag == '0':
+            #     self.ps.write('OUTPUT ON')
 
             print('Started power supply output.')
-        else:
-            print('Cannot run power supply; power supply did not initialize properly.')
+        # else:
+        #     print('Cannot run power supply; power supply did not initialize properly.')
 
     def read_V_I(self):
 
-        if self.ps is not None:
-            # query power supply for voltage
-            self.ps.write('MEAS:VOLT? P6V')
-            self.ps.write('++read')
-            voltage = float(self.ps.read().strip())
+        # if self.ps is not None:
+        V_vary = random.uniform(-0.05,0.05)
+        I_vary = random.uniform(-1, 1)
 
-            # query power supply for current
-            self.ps.write('MEAS:CURR? P6V')
-            self.ps.write('++read')
-            current = float(self.ps.read().strip())
-        else:
-            print('Cannot measure voltage/current; power supply did not initialize properly.')
-            voltage = 1
-            current = 1
+            # # query power supply for voltage
+            # self.ps.write('MEAS:VOLT? P6V')
+            # self.ps.write('++read')
+            # voltage = float(self.ps.read().strip())
+            #
+            # # query power supply for current
+            # self.ps.write('MEAS:CURR? P6V')
+            # self.ps.write('++read')
+            # current = float(self.ps.read().strip())
+
+        voltage = self.lastV + V_vary
+        current = self.lastI + I_vary
+
+        self.lastV = voltage
+        self.lastI = current
+
+        # else:
+        #     print('Cannot measure voltage/current; power supply did not initialize properly.')
+        #     voltage = 1
+        #     current = 1
 
         return voltage, current
 
@@ -1577,9 +1634,9 @@ def menu():
     # how often to check voltage and current, in seconds
     check_interval_def = 5
     # how often to notify (if still good) in minutes
-    notify_interval_def = 20.0
+    notify_interval_def = 1.0
     # how often to notify if bad in minutes
-    error_notify_interval_def = 1
+    error_notify_interval_def = 1.0
 
     ###############################################################################
     ###############################################################################
@@ -1768,9 +1825,16 @@ def menu():
     outputFrame = tk.LabelFrame(root, text="Output Window", padx=labelFramePadDef[0] - 2, pady=labelFramePadDef[1] - 2)
     outputFrame.pack()
 
-    output = scrolledtext.ScrolledText(outputFrame, width=60, height=20, font=("Tekton Pro", 9))
-    output.config(state="disabled")
-    output.grid(row=0, column=0, padx=0, pady=2)
+    # output = scrolledtext.ScrolledText(outputFrame, width=60, height=20, font=("Tekton Pro", 9))
+    # output.config(state="disabled")
+    # output.grid(row=0, column=0, padx=0, pady=2)
+
+    # oxySensorReadLabel = tk.Label(oxyFrame, text="Oxygen Sensor\nRead", height=2)
+    # oxySensorReadLabel.grid(row=0, column=0, padx=gridPadDef[0])
+    # oxySensorReadBox = tk.Entry(oxyFrame,width = 7)
+    # oxySensorReadBox.grid(row=0,column=1,padx=gridPadDef[0])
+    # oxySensorReadBox['state'] = tk.DISABLED
+
     ##################################
 
     #### Oxygen and Syringe Pump Window ####
@@ -2126,7 +2190,7 @@ def menu():
         timesToCheckEntry['state'] = tk.DISABLED
 
         # If we have
-        monitorAppObject.startMonitor()
+        monitorAppObject[0].startMonitor()
 
     def stopElectroplating():
         stopButton['state'] = tk.DISABLED
@@ -2134,7 +2198,7 @@ def menu():
 
         runButton['state'] = tk.NORMAL
 
-        monitorAppObject.stopMonitor()
+        monitorAppObject[0].stopMonitor()
 
     def pauseElectroplating():
         if monitorAppObject.getPauseState() == 0:
@@ -2184,7 +2248,7 @@ def menu():
     # solenoidHighBox.bind('<Key>', lambda event: updateMonitorApp(), add="+")
     # notifyTimerEntry.bind('<Key>', lambda event: updateMonitorApp(), add="+")
     # errorNotifyEntry.bind('<Key>', lambda event: updateMonitorApp(), add="+")
-    
+
     vTargetBox.bind('<FocusOut>', lambda event: updateMonitorApp(),add="+")
     iBox.bind('<FocusOut>', lambda event: updateMonitorApp(), add="+")
     vHighBox.bind('<FocusOut>', lambda event: updateMonitorApp(), add="+")

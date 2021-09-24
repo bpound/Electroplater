@@ -99,7 +99,7 @@ class NotifyCSingle():
         self.dirToPickle =
 
     # Create googleEmailAPI functions for message protocol. Won't need to be used outside of this class? (Hopefully)
-    def get_service(pathToCredentials, dirToPickle):
+    def get_service(self,pathToCredentials, dirToPickle):
         """Gets an authorized Gmail API service instance.
 
         pathToCredentials: path, including name, of the credentials .json file
@@ -249,13 +249,12 @@ class NotifyCSingle():
                     current_date_time, typeD, self.msg, self.error_notify_count, infused_vl, V_new, I_new)
                 print(emailBody)
 
-                # Ignore text message prootcols for now
-                # if self.notifyType in [1, 3]:
-                #     try:
-                #         self.notify_textmessage(message)
-                #     except:
-                #         print(
-                #             'Could not *bad* notify via text message - continuing and hoping that the error was not fatal.')
+                if self.notifyType in [1, 3]:
+                    try:
+                        self.notify_textmessage(emailBody)
+                    except:
+                        print(
+                            'Could not *bad* notify via text message - continuing and hoping that the error was not fatal.')
 
                 if self.notifyType in [2, 3]:
                     try:
@@ -275,13 +274,12 @@ class NotifyCSingle():
             emailBody = '%s. Good.%s Inf: %.3f uL. V: %.3f V, I: %.3f .A' % (
                 current_date_time, self.msg, infused_vl, V_new, I_new)
 
-            # Ignoring text message protocols for now
-            # if self.notifyType in [1, 3] and self.use_text_only_for_bad_news is False:
-            #     try:
-            #         self.notify_textmessage(message)
-            #     except:
-            #         print(
-            #             'Could not *good* notify via text message - continuing and hoping that the error was not fatal.')
+            if self.notifyType in [1, 3] and self.use_text_only_for_bad_news is False:
+                try:
+                    self.notify_textmessage(emailBody)
+                except:
+                    print(
+                        'Could not *good* notify via text message - continuing and hoping that the error was not fatal.')
 
             if self.notifyType in [2, 3]:
                 try:
