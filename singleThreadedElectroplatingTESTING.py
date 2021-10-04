@@ -124,12 +124,17 @@ class Solenoid_Controller():
         GPIO.setup(self.control_pin, GPIO.OUT)
 
     def open_solenoid(self):
-        GPIO.output(self.control_pin, GPIO.HIGH)
-        self.status = 1
+        # Let out oxygen
+        # GPIO.output(self.control_pin, GPIO.HIGH)
+        # self.status = 1
+        
+        # Tell the monitor loop to send 
+        return
 
     def close_solenoid(self):
-        GPIO.output(self.control_pin, GPIO.LOW)
-        self.status = 0
+        # Let in oxygen
+        # GPIO.output(self.control_pin, GPIO.LOW)
+        # self.status = 0
 
     def cleanup(self):
         if self.status == 1:  # if its open, shut it before continuing
@@ -264,6 +269,9 @@ class monitorApp(tk.Frame):
         # Solenoid
         self.solenoidLowBound = solenoidLowBound
         self.solenoidHighBound = solenoidHighBound
+        
+        self.solenoidClosedFlag = False #Flags triggered when the solenoid is closed or open in order to prevent Solenoid code from being repeated
+        self.solenoidOpenedFlag = False 
 
         # Notify Class
         self.okNotifyIntervalMin = okNotifyIntervalMin
@@ -395,17 +403,23 @@ class monitorApp(tk.Frame):
         ### Check if we need to close or open the solenoid
         # Read 02 sensor
 
-        # if self.platingType == "PERMALLOY" and self.useSolenoidandOxy:
-        #     newVOxy, newO2 = self.OxySensor.read_O2_conc()
-        #     # if 02 > 2%
-        #     if newO2 > self.solenoidHighBound:
-        #         #   Run open solenoid
-        #         self.Solenoid.open_solenoid()
-        #         self.solenoidStartTime = time.time()
-        #     # if 02 < 0.5% or ran for more than 5 minutes
-        #     if newO2 < self.solenoidLowBound or self.nowTime - self.solenoidStartTime / 60.0 > 5:
-        #         #   Run close solenoid
-        #         self.Solenoid.close_solenoid()
+        if self.platingType == "PERMALLOY" and self.useSolenoidandOxy == True:
+            newVOxy, newO2 = self.OxySensor.read_O2_conc()
+            # if 02 > 2%
+            if newO2 > self.solenoidHighBound and self.solenoidOpenedFlag == False:
+                #   Run open solenoid
+                self.Solenoid.open_solenoid()
+                self.solenoidStartTime = time.time()
+                
+                self.solenoidClosedFlag = False
+                self.solenoidOpenedFlag = True
+            # if 02 < 0.5% or ran for more than 5 minutes
+            if newO2 < self.solenoidLowBound or self.nowTime - self.solenoidStartTime / 60.0 > 5 and self.solenoidClosedFlag == False:
+                #   Run close solenoid
+                self.Solenoid.close_solenoid()
+                
+                self.solenoidClosedFlag = True
+                self.solenoidOpenedFlag = False
 
         successfulRead = True
         timeErrorDelta = self.nowTime - self.lastErrorNotifyTime - self.pauseDiff
