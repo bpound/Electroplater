@@ -3,8 +3,6 @@ from datetime import datetime
 from twilio.rest import Client
 import time,pyvisa
 
-import matplotlib.pyplot as plt
-
 import base64
 import logging
 import os
@@ -13,11 +11,9 @@ import pickle
 import random
 
 #import board
-import busio
+#import busio
 #import adafruit_ads1x15.ads1115 as ADS
 #from adafruit_ads1x15.analog_in import AnalogIn
-
-
 
 from email.mime.multipart import MIMEMultipart
 from email.mime.text      import MIMEText
@@ -31,549 +27,27 @@ from googleapiclient.discovery import build
 
 #GUI modules
 import tkinter as tk
+import matplotlib
+matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 from tkinter import scrolledtext
 
-import RPi.GPIO as GPIO
-
-class O2_Sensor():
-    def __init__(self, numReads):
-
-        ### setup the adc to read the O2 sensor
-        # create the I2C bus
-        try:
-            i2c = busio.I2C(board.SCL, board.SDA)
-            # create the adc object using the I2C bus
-            ads = ADS.ADS1115(i2c)
-            # set the gain (2/3,1,2,4,8,16); probably doesn't do anything since we use the voltage reading directly
-            ads.gain = 1
-        except:
-            print("Something went wrong with 02 Sensor Intialization")
-
-        # create differential input chetween channel 0 and 1. No need to set the gain, we will use the voltage directly.
-        try:
-            self.chan = AnalogIn(ads, ADS.P0, ADS.P1)
-        except:
-            print("Something went wrong with O2 Sensor Initialization")
-
-        # put default values for calibration here
-        self.o2_percent = 20.9  # percentage of O2 in plating lab; since we are close to sea level, I use 20.9
-        self.o2_b = 0  # [V] "base" value that the O2 sensor outputs in 0% O2
-        self.o2_a = 0.011  # [V] "atmospheric" value, that the O2 sensor outputs in normal air, which is 20.9% O2 at sea level
-
-        # calculate conversion factor
-        self.conversion_factor = 0
-        self._calculate_conversion_factor()  # assigns value directly to self.conversion_factor
-
-        # number of reads to do during calibration
-        self.numReads = numReads
-
-        self.startO2 = 50 # Percentage of O2 at start of simulation.
-
-    def updateNumReads(self,numReads):
-        self.numReads = numReads
-
-    def _calculate_conversion_factor(self):
-        # conversion factor to convert volts to O2 concentration
-        print('old conversion factor: %.6f [percent/V]' % (self.conversion_factor))
-        self.conversion_factor = self.o2_percent / (
-                    self.o2_a - self.o2_b)  # divide by 1000 to convert o2_a/b from [mV] to [V]
-        print('new conversion factor: %.6f [percent/V]' % (self.conversion_factor))
-
-    def calibrate(self):
-
-        # take ten measurements in normal atmostphere, average, and assign value of 20.9% O2
-        print('old value of o2_a: %.6f [V]' % (self.o2_a))
-        o2_a = 0
-        for ii in range(self.numReads):
-            o2_a += self.chan.voltage
-
-        self.o2_a = o2_a / self.numReads  # get new averaged o2_a value
-
-        print('new value of o2_a: %.6f [V]' % (self.o2_a))
-        self._calculate_conversion_factor()  # calculate new conversion factor
-
-    def read_O2_conc(self):
-
-        newV_settled = 0
-        newO2perc_settled = 0
-        for ii in range(self.numReads):
-            newV = self.chan.voltage
-            new_O2_perc_value = newV * self.conversion_factor
-
-            newV_settled += newV
-            newO2perc_settled += new_O2_perc_value
-            time.sleep(0.01)
-
-        # gets average
-        newV_settled = newV_settled / self.numReads
-        newO2perc_settled = newO2perc_settled / self.numReads
-
-        return newV_settled, newO2perc_settled
-
-class Solenoid_Controller():
-    def __init__(self):
-        ## initial setup
-        self.control_pin = 37
-        self.status = 0  # 0 is closed, 1 is open
-
-        # set the board pin number address scheme. We want to use pin 37 for signal. The ground is plugged into pin 39 (doesn't need to be controlled, obviously)
-        GPIO.setmode(GPIO.BOARD)
-
-        # set up pin 37 as output
-        GPIO.setup(self.control_pin, GPIO.OUT)
-
-    def open_solenoid(self):
-        # Let out oxygen
-        # GPIO.output(self.control_pin, GPIO.HIGH)
-        # self.status = 1
-        
-        # Tell the monitor loop to send 
-        return
-
-    def close_solenoid(self):
-        # Let in oxygen
-        # GPIO.output(self.control_pin, GPIO.LOW)
-        # self.status = 0
-
-    def cleanup(self):
-        if self.status == 1:  # if its open, shut it before continuing
-            self.close_solenoid()
-        GPIO.cleanup()
-
-
-class monitorApp(tk.Frame):
-    ## Important problem
-    # Incorporating the pause difference into things inside the loop
-
-    def __init__(self,parent,ps,Notify,V_set,I_set,ps_checking_interval,infuseInterval,infuseRate,okNotifyIntervalMin,
-                 error_notify_interval_def,sp,Solenoid,OxySensor,numReads,solenoidLowBound,solenoidHighBound):
-        tk.Frame.__init__(self,parent,width="100",height="100")
-
-        self.platingType = ""
-        self.useSolenoidandOxy = False
-
-        ## Important subobjects
-        self.ps = ps
-        self.sp = sp
-        self.Notify = Notify
-        self.Solenoid = Solenoid
-        self.OxySensor = OxySensor
-
-        ## Parameters for the power supply
-        self.vTar = V_set[0]
-        self.iTar = I_set
-        self.vHigh = V_set[2]
-        self.vLow = V_set[1]
-        self.ps_checking_interval = ps_checking_interval ## MAIN Time interval for a lot of the code, a lot of other
-                                                         ## actions will be dependent on this (def: 5)
-
-        ## Parameters for the syringe pump
-        self.infuseInterval = infuseInterval
-        self.infuseRate = infuseRate
-        self.infusionDone = False
-        self.startInfusionTime = 10 # Time when we want to start the infusion in something
-
-        ## Parameters for 02 sensor
-        self.numReads = numReads
-
-        ## Parameters for the solenoid
-        self.solenoidStartTime = 0
-        self.solenoidLowBound = solenoidLowBound # Percentages
-        self.solenoidHighBound = solenoidHighBound
-
-        ## Parameters for the notifyClass
-        self.okNotifyIntervalMin = okNotifyIntervalMin # Minutes between standard notifications
-        self.errorNotifyInterval = error_notify_interval_def # Minimum minutes between the monitorApp sending an error notificiation
-        self.error_notify_count = 0 # Total number of errors occured during a run
-        self.error_notify_cnt_MAX = 8 # Max TOTAL number of errors, not sure if I'm even gonna use this
-        self.lastStandardNotifyTime = 0 # Last STANDARD notification time
-        self.lastErrorNotifyTime = 0
-        self.failLast20Min = 0
-        self.failLast20Threshold = 20
-
-        ## Parameters for internal timing
-        self.startTime = time.time()
-        self.pauseState = 0
-        self.fromPause = 0
-        self.startPauseTime = 0
-        self.stopPauseTime = 0
-        self.pauseDiff = 0
-
-        self.doReplenishment = False
-        self.sendReplenishUpdates = False
-
-        ## Parameters for plotting the voltage and current
-        self.x_data, self.y_data = [], []
-        self.tPlot, self.aPlot, self.bPlot = [], [], []
-        self.figure = plt.figure()
-        self.p1 = self.figure.add_subplot(111)
-        self.line1, = plt.plot(self.tPlot, self.aPlot, '-')
-        self.line2, = plt.plot(self.tPlot,self.bPlot, '-')
-
-    def __str__(self):
-        return "I am alive, is nice."
-
-    def __repr__(self):
-        return "I am alive, is nice"
-
-    def printParams(self):
-        print("\nPRINTING CURRENT PARAMETERS \n")
-        print("TARGET VOLTAGE (Volts): " + str(self.vTar))
-        print("TARGET CURRENT (Amps): " + str(self.iTar))
-        print("HIGH VOLTAGE BOUND (Volts): " + str(self.vHigh))
-        print("LOW VOLTAGE BOUND (Volts): " + str(self.vLow))
-        print("POWER SUPPLY CHECKING INTERVAL (Seconds): " + str(self.ps_checking_interval))
-        print("SYRINGE INFUSION INTERVAL (Hours): " + str(self.infuseInterval))
-        print("SYRINGE INFUSION RATE ([some prefix]L/s): " + str(self.infuseRate))
-        print("NUMBER OF OXYGEN READS TO CALIBRATE: " + str(self.numReads))
-        print("SOLENOID LOW BOUND (%): " + str(self.solenoidLowBound))
-        print("SOLENOID HIGH BOUND (%): " + str(self.solenoidHighBound))
-        print("STANDARD NOTIFY INTERVAL (minutes): " + str(self.okNotifyIntervalMin))
-        print("ERROR NOTIFY INTERVAL (minutes): " + str(self.errorNotifyInterval))
-        print("")
-        print("Plating type: " + self.platingType)
-        print("Use Solenoid and Oxygen Sensor? " + str(self.useSolenoidandOxy))
-
-    def setParams(self,
-                  vTar,
-                  iTar,
-                  vHigh,
-                  vLow,
-                  ps_checking_interval,
-                  infuseInterval,
-                  infuseRate,
-                  replenishUpdateInterval,
-                  numReads,
-                  solenoidLowBound,
-                  solenoidHighBound,
-                  okNotifyIntervalMin,
-                  errorNotifyInterval,
-                  plateOption,
-                  solenoidOn):
-        # Power Supply
-        self.vTar = vTar
-        self.iTar = iTar
-        self.vHigh = vHigh
-        self.vLow = vLow
-        self.ps_checking_interval = ps_checking_interval
-
-        # Syringe Pump
-        self.infuseInterval = infuseInterval
-        self.infuseRate = infuseRate
-        self.replenishUpdateInterval = replenishUpdateInterval
-
-        # O2 Sensor
-        self.numReads = numReads
-
-        # Solenoid
-        self.solenoidLowBound = solenoidLowBound
-        self.solenoidHighBound = solenoidHighBound
-        
-        self.solenoidClosedFlag = False #Flags triggered when the solenoid is closed or open in order to prevent Solenoid code from being repeated
-        self.solenoidOpenedFlag = False 
-
-        # Notify Class
-        self.okNotifyIntervalMin = okNotifyIntervalMin
-        self.errorNotifyInterval = errorNotifyInterval
-
-        self.platingType = plateOption
-
-        if solenoidOn == 1:
-            self.useSolenoidandOxy = True
-        if solenoidOn == 0:
-            self.useSolenoidandOxy = False
-
-
-    def openSolenoid(self):
-        self.Solenoid.open_solenoid()
-
-    def closeSolenoid(self):
-        self.Solenoid.close_solenoid()
-
-    def getPauseDiff(self):
-        return self.pauseDiff
-
-    def getPauseState(self):
-        return self.pauseState
-
-    def startMonitor(self):
-        self.ps.run(self.vTar,self.iTar)
-
-        self.startTime = time.time()
-        self.oldTime = self.startTime
-        self.lastInfuseTime = self.startTime
-        self.lastStandardNotifyTime = self.startTime
-        self.lastErrorNotifyTime = self.startTime
-        self.nowTime = self.startTime
-        self.totalI = 0
-
-        self.vOld = self.vTar
-        self.iOld = self.iTar
-
-        self.loopThing()
-
-    def pauseMonitor(self):
-        if self.pauseState == 0:
-            self.pauseState = 1
-            self.startPauseTime = time.time()
-
-            self.ps.run(0,0)
-
-            self.callback
-            return
-        if self.pauseState == 1:
-            self.pauseState = 0
-            self.fromPause = 1
-
-            self.stopPauseTime = time.time()
-
-            self.pauseDiff += self.stopPauseTime - self.startPauseTime
-
-            self.ps.run(self.vTar, self.iTar)
-
-            self.callback
-            return
-
-    def stopMonitor(self):
-        self.ps.stop()
-        # Do some stuff of saving the graph and turning off the power supply
-        st = datetime.now()
-
-        #self.figure.savefig("IV_Plot_",st)
-        self.infusionDone = False
-        self.currentInfusions = 0
-
-        self.after_cancel(self.callback)
-        return
-
-    def loopThing(self):
-        '''
-        Pseudocode:
-        Save old time
-        Get new time
-        save important time deltas
-
-        toPlotTime: Time to be sent to the plotting routine (DOES NOT ACCOUNT FOR WHEN THE monitorAPP is paused)
-        tempTimeDelta = the time since our last point of reference (ACCOUNTS FOR WHEN THE monitorAPP is paused)
-
-        '''
-
-        self.oldTime = self.nowTime
-        self.nowTime = time.time()
-        toPlotTime = self.nowTime - self.startTime
-
-        # Check if it is time to send a notification
-        tempTimeDelta = self.nowTime - self.lastStandardNotifyTime - self.pauseDiff
-
-        tempInfusedamtq = 0
-
-        # Think about the time that the thing is paused affecting notify time
-        ## Check if it is time to send a normal notification
-
-
-        #Attempt to read the power supply
-        '''
-        Power supply checking, error case flow:
-        
-            -Attempt to read from power supply            
-                -Couldn't read from power supply?
-                    -Add a fail to the last20Min count
-                    -Are we above our threshold?
-                        *NOTIFY CASE: FAIL THRESHOLD REACHED
-                        
-                -Succesfully read power supply
-                    -Check if our voltage is out of bounds
-                        -Add a fail to last20Min count
-                        -Are we above our threshold?
-                            *NOTIFY CASE: FAIL THRESHOLD REACHED
-                        -Has it been more than errorNotifyInterval minutes since we last complained?
-                            *NOTIFY CASE: VOLTAGE READING OUT OF BOUNDS
-                    -Check if our current is out of bounds
-                        -Add a fail to last20Min count
-                        -Are we above our threshold?
-                            *NOTIFY CASE: FAIL THRESHOLD REACHED
-                        -Has it been more than errorNotifyInterval minutes since we last complained?
-                            *NOTIFY CASE: VOLTAGE READING OUT OF BOUNDS
-                            
-                    -Else we good, continue to the rest of the loop
-        '''
-
-        # PERMALLOY & IF its checkbox is ticked
-        ### Check if we need to close or open the solenoid
-        # Read 02 sensor
-
-        if self.platingType == "PERMALLOY" and self.useSolenoidandOxy == True:
-            newVOxy, newO2 = self.OxySensor.read_O2_conc()
-            # if 02 > 2%
-            if newO2 > self.solenoidHighBound and self.solenoidOpenedFlag == False:
-                #   Run open solenoid
-                self.Solenoid.open_solenoid()
-                self.solenoidStartTime = time.time()
-                
-                self.solenoidClosedFlag = False
-                self.solenoidOpenedFlag = True
-            # if 02 < 0.5% or ran for more than 5 minutes
-            if newO2 < self.solenoidLowBound or self.nowTime - self.solenoidStartTime / 60.0 > 5 and self.solenoidClosedFlag == False:
-                #   Run close solenoid
-                self.Solenoid.close_solenoid()
-                
-                self.solenoidClosedFlag = True
-                self.solenoidOpenedFlag = False
-
-        successfulRead = True
-        timeErrorDelta = self.nowTime - self.lastErrorNotifyTime - self.pauseDiff
-
-        print("")
-        print("Now Time: " + str(self.nowTime))
-        print("Old Time: " + str(self.oldTime))
-        print("Last Error Notification: " + str(self.lastErrorNotifyTime))
-        print("tempTimeDelta: " + str(tempTimeDelta))
-
-
-        if self.pauseState == 0:
-            try: vNew, iNew = self.ps.read_V_I()
-            except:
-                vNew = self.vOld
-                iNew = self.iOld
-
-                self.failLast20Min = self.failLast20Min + 1
-                successfulRead = False
-                print("Failed to get measurment - sleeping and skipping to next iteration hoping that the problem was not fatal")
-
-                if timeErrorDelta/60 > self.errorNotifyInterval:
-                    self.Notify.notify("Reading Failed",vNew,iNew,tempInfusedamtq,'',[0, 0])
-                if self.failLast20Min > self.failLast20Threshold:
-                    self.Notify.notify("Fail Threshold Reached", vNew,iNew,tempInfusedamtq,'',[0,0])
-                    # NOTIFY CASE: FAIL THRESHOLD REACHED
-                    pass
-
-        self.vOld = vNew
-        self.iOld = iNew
-
-        print("Time since last error message (min): " + str(timeErrorDelta))
-
-        print("Fail last 20 min: " + str(self.failLast20Min))
-        print("Current out of bounds? " + str(iNew < (self.iTar - self.iTar * 0.1) or iNew > (self.iTar + self.iTar * 0.1)))
-
-        if successfulRead == True and self.pauseState == 0:
-            if self.failLast20Min > self.failLast20Threshold:
-                self.Notify.notify("Fail Threshold Reached",vNew,iNew,tempInfusedamtq,'',[0, 0],self.failLast20Min)
-
-            if tempTimeDelta / 60 >= 20 and self.pauseState == 0:
-                self.lastStandardNotifyTime = time.time()  # Place a time new reference to create notifications from
-                self.failLast20Min = 0
-                self.Notify.notify("Standard", vNew, iNew, tempInfusedamtq, '', [0, 0],self.failLast20Min)
-
-                # NOTIFY CASE: STANDARD CASE
-
-            if tempTimeDelta / 60 >= self.okNotifyIntervalMin and self.pauseState == 0:
-                self.lastStandardNotifyTime = time.time()
-                # NOTIFY CASE: STANDARD 20 MIN
-                self.Notify.notify("Standard", vNew, iNew, tempInfusedamtq, '', [0, 0],self.failLast20Min)
-                self.failLast20Min = 0
-
-            if vNew > self.vHigh or vNew < self.vLow:
-                if self.failLast20Min == 0:  # Send a notification error for the first time in 20 minutes regardless
-                    # NOTIFY CASE: VOLTAGE OUT OF BOUNDS
-                    self.lastErrorNotifyTime = time.time()
-                    print("Sending 1st Out of Bounds Message")
-                    self.Notify.notify("Voltage Out of Bounds", vNew, iNew, tempInfusedamtq, '', [0, 0],self.failLast20Min)
-                    pass
-                if (self.nowTime-self.lastErrorNotifyTime)/60 >= self.errorNotifyInterval:
-                    # NOTIFY CASE: VOLTAGE OUT OF BOUNDS
-                    print("Sending 2nd+ Out of Bounds Message")
-                    self.Notify.notify("Voltage Out of Bounds", vNew, iNew, tempInfusedamtq, '', [0, 0],self.failLast20Min)
-                    self.lastErrorNotifyTime = time.time()
-                    pass
-                self.failLast20Min = self.failLast20Min + 1
-
-            if iNew < (self.iTar - self.iTar * 0.1) or iNew > (self.iTar + self.iTar * 0.1):
-
-                self.lastErrorNotifyTime = time.time()
-                if self.failLast20Min == 0:
-                    # NOTIFY CASE: CURRENT OUT OF BOUNDS
-                    self.lastErrorNotifyTime = time.time()
-                    self.Notify.notify("Current outside range", vNew, iNew, tempInfusedamtq, '', [0, 0],self.failLast20Min)
-                    pass
-                if (self.nowTime-self.lastErrorNotifyTime)/60 >= self.errorNotifyInterval:
-                    # NOTIFY CASE: CURRENT OUT OF BOUNDS
-                    self.lastErrorNotifyTime = time.time()
-                    self.Notify.notify("Current outside range", vNew, iNew, tempInfusedamtq, '', [0, 0],self.failLast20Min)
-                    pass
-                self.failLast20Min = self.failLast20Min + 1
-
-        # RUN IF COPPER ONLY. TURN OFF FOR PERMALLOY
-        # Assumption: Infusion time is max 5 seconds (to not break power supply checking interval)
-        # Check if it is time to run the infusion (ONLY WHEN WE ARE DOING... nickel?)
-
-        # if (self.nowTime - self.lastInfuseTime- self.pauseDiff)/3600.0 > 1:
-        #     self.doReplenishment = True
-        #
-        # if self.platingType == "COPPER":
-        #     # After 1 hours, do replenishment
-        #         # Turn on flag to send replenishment status updates
-        #     if self.doReplenishment == True and (self.nowTime - self.lastInfuseTime - self.pauseDiff)/3600.0 > self.infuseInterval and self.pauseState == 0:
-        #         self.sendReplenishUpdates = True
-        #         self.lastReplenishUpdateTime = self.nowTime
-        #
-        #
-        #         totalT = self.nowTime - self.lastInfuseTime - self.pauseDiff
-        #
-        #     # take the total I and divide it by the total time to get the average current over the time period
-        #         try:
-        #             I_avg = (self.total_I) / totalT
-        #         except:
-        #             I_avg = 0
-        #
-        #         # reset the reference timer and total_I
-        #         self.total_I = 0
-        #
-        #         # set the infuse parameters and run the pump
-        #         self.sp.set_parameters(I_avg, self.infuseRate, self.infuseInterval)
-        #         time.sleep(0.1)
-        #         self.sp.infuse()
-        #         time.sleep(0.1)
-        #     else:
-        #         self.totalI = self.totalI + iNew * (self.nowTime - self.oldTime)
-        #
-        #     # After we have finished the number of infusions we want, we now monitor it
-        #     # if sendReplenish Updates flag is true
-        #     if (self.sendReplenishUpdates == True and (self.nowTime - self.lastReplenishUpdateTime - self.pauseDiff)/3600.0 > self.replenishUpdateInterval):
-        #         infused_volume, infuse_rate = self.sp.check_rate_volume()
-        #         curr_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        #         new_infusion = '%s : infused %.3f uL replenisher after %.2f hours at %.3f uL/s with %.3f A average current.' % (
-        #             curr_time, infused_volume, self.infuseInterval, infuse_rate, I_avg)
-        #
-        #         if self.sp.use_flag is True: #Check what use_flag does
-        #             self.sp.infusion_list.append(new_infusion)
-        #             print("# infusions: ", len(self.sp.infusion_list))
-
-        ## Add the new voltage and current readings into the plot
-        self.tPlot.append(toPlotTime)
-        self.aPlot.append(vNew)
-        self.bPlot.append(iNew)
-        self.line1.set_data(self.tPlot, self.aPlot)
-        self.line2.set_data(self.tPlot, self.bPlot)
-        self.figure.gca().relim()
-        self.figure.gca().autoscale_view()
-        try:
-            # total elapsed time in hh:mm:ss
-            hr, rem = divmod(self.tPlot[-1] - self.tPlot[0], 3600)
-
-            mins, sec = divmod(rem, 60)
-            time_axis_title = "Time (s): Elapsed time is {:0>2} hours, {:0>2} minutes, {:d} seconds".format(int(hr),
-                                                                                                            int(mins),
-                                                                                                            int(sec))
-        except:
-            time_axis_title = "Time (s)"
-        plt.legend(['Voltage', 'Current'])
-        plt.xlabel(time_axis_title)
-
-        ## Wait 5 seconds (or probably change depending on the entry to the power supply checking interval) then run again
-        print("Looped")
-        self.callback = self.after(5000, self.loopThing)
-
+try:
+    import RPi.GPIO as GPIO
+except:
+    import Mock.GPIO as GPIO
+
+screenshotPath = "C:\\Users\\Gabriele Domingo\\Pictures\\potato.png"
+'''
+Class Order:
+Power Supplies (95)
+Legato100_SP (392)
+O2_Sensor (609)
+Solenoid_Controller (701)
+NotifyCSingle (732)
+monitorApp (1008)
+Main GUI menu (1462)
+'''
 
 class CreateToolTip(object):
     def __init__(self, widget, text='widget info'):
@@ -622,6 +96,640 @@ class CreateToolTip(object):
         self.tw= None
         if tw:
             tw.destroy()
+
+''' HARDWARE CLASSES'''
+class E3631A_PS():
+    def __init__(self, channel, ps_port, ps_ident):
+
+        # save identification
+        self.ident = ps_ident
+
+        # open up Resource Manager
+        # rm = pyvisa.ResourceManager('@py')
+
+        # open up the right channel
+        # the USB resource needs to be figured out beforehand, there is no way to figure out which power supply is
+
+        self.startI = -8
+        self.startV = -8
+
+        # try:
+        #     # ps = rm.open_resource(ps_port)
+        #     #
+        #     # # set address and protocol
+        #     # ps.write('++addr %i' % channel)
+        #     # ps.write('++eos 0')
+        #     # time.sleep(0.01)
+        #     #
+        #     # # try to get a response from power supply, in this case its identity
+        #     # ps.write('*IDN?')
+        #     # ps.write('++read')
+        #     # print('Power supply identity: %s , %s' % (ps_port, ps.read().strip()))
+        #     #
+        #     # # save communication instance into class variable
+        #     # self.ps = ps
+        # except:
+        #     print('Something went wrong with power supply initialization.')
+        #     self.ps = None
+
+    def run(self, V, I):
+
+        # if self.ps is not None:
+
+            self.startI = I
+            self.startV = V
+
+            self.lastI = self.startI
+            self.lastV = self.startV
+
+            # take output off, set new voltage and current, then turn output back on
+            # ps.write('OUTPUT OFF')
+            # self.ps.write('APPL P6V, %f, %f' % (V, I))
+            #
+            # # check if output is already on
+            # self.ps.write('OUTPUT?')/
+            # self.ps.write('++read')
+            # on_flag = self.ps.read().strip()
+            #
+            # if on_flag == '0':
+            #     self.ps.write('OUTPUT ON')
+
+            print('Started power supply output.')
+        # else:
+        #     print('Cannot run power supply; power supply did not initialize properly.')
+
+    def read_V_I(self):
+
+        # if self.ps is not None:
+        V_vary = random.uniform(-0.05,0.05)
+        I_vary = random.uniform(-1, 1)
+
+            # # query power supply for voltage
+            # self.ps.write('MEAS:VOLT? P6V')
+            # self.ps.write('++read')
+            # voltage = float(self.ps.read().strip())
+            #
+            # # query power supply for current
+            # self.ps.write('MEAS:CURR? P6V')
+            # self.ps.write('++read')
+            # current = float(self.ps.read().strip())
+
+        voltage = self.lastV + V_vary
+        current = self.lastI + I_vary
+
+        self.lastV = voltage
+        self.lastI = current
+
+        # else:
+        #     print('Cannot measure voltage/current; power supply did not initialize properly.')
+        #     voltage = 1
+        #     current = 1
+
+        return voltage, current
+
+    def stop(self):
+        if self.ps is not None:
+            self.ps.write('OUTPUT OFF')
+            print('Power supply is turned off.')
+        else:
+            print('Power supply did not initialize properly, so it cannot be turned off if on.')
+
+    def disconnect(self):
+        if self.ps is not None:
+            self.ps.close()
+            print('Power supply has been disconnected.')
+        else:
+            print('Power supply was not initialized properly, but hopefully is disconnected anyway.')
+class E3634A_PS():
+    def __init__(self, channel, ps_port, ps_ident):
+
+        # save identification
+        self.ident = ps_ident
+
+        # open up Resource Manager
+        rm = pyvisa.ResourceManager('@py')
+
+        # open up the right channel
+        # the USB resource needs to be figured out beforehand, there is no way to figure out which power supply is
+        try:
+            ps = rm.open_resource(ps_port)
+
+            # set address and protocol
+            ps.write('++addr %i' % channel)
+            ps.write('++eos 0')
+            time.sleep(0.01)
+
+            # try to get a response from power supply, in this case its identity
+            ps.write('*IDN?')
+            ps.write('++read')
+            print('Power supply identity: %s , %s' % (ps_port, ps.read().strip()))
+
+            # save communication instance into class variable
+            self.ps = ps
+        except:
+            print('Something went wrong with power supply initialization.')
+            self.ps = None
+
+    def run(self, V, I):
+
+        if self.ps is not None:
+            # take output off, set new voltage and current, then turn output back on
+            # ps.write('OUTPUT OFF')
+            self.ps.write('VOLTage:RANGe P25V')
+            self.ps.write('APPL %f, %f' % (V, I))
+
+            # turn on the output
+            self.ps.write('OUTPUT ON')
+            print('Started power supply output.')
+        else:
+            print('Cannot run power supply; power supply did not initialize properly.')
+
+    def read_V_I(self):
+
+        if self.ps is not None:
+            # query power supply for voltage
+            self.ps.write('MEASURE:VOLTAGE?')
+            self.ps.write('++read')
+            voltage = float(self.ps.read().strip())
+
+            # query power supply for current
+            self.ps.write('MEASURE:CURRENT?')
+            self.ps.write('++read')
+            current = float(self.ps.read().strip())
+        else:
+            print('Cannot measure voltage/current; power supply did not initialize properly.')
+            voltage = 1
+            current = 1
+
+        return voltage, current
+
+    def stop(self):
+        if self.ps is not None:
+            self.ps.write('OUTPUT OFF')
+            print('Power supply is turned off.')
+        else:
+            print('Power supply did not initialize properly, so it cannot be turned off if on.')
+
+    def disconnect(self):
+        if self.ps is not None:
+            self.ps.close()
+            print('Power supply has been disconnected.')
+        else:
+            print('Power supply was not initialized properly, but hopefully is disconnected anyway.')
+class E36105B_PS():
+    def __init__(self, channel, ps_port, ps_ident):
+
+        # save identification
+        self.ident = ps_ident
+
+        # open up Resource Manager
+        # rm = pyvisa.ResourceManager('@py')
+
+        # open up the right channel
+        # the USB resource needs to be figured out beforehand, there is no way to figure out which power supply is
+        try:
+            ps = usbtmc.Instrument(ps_port)
+
+            # set address and protocol
+            # ps.write('++addr %i'%channel)
+            # ps.write('++eos 0') #Append CR+LF (ASCII 13 & 10 respectively) to instrument commands
+            time.sleep(0.01)
+
+            # try to get a response from power supply, in this case its identity
+            idn = ps.ask('*IDN?\n')
+            # ps.write('++read')
+            print('Power supply identity: %s , %s' % (ps_port, idn))
+
+            # save communication instance into class variable
+            self.ps = ps
+        except:
+            print('Something went wrong with power supply initialization.')
+            self.ps = None
+
+    def run(self, V, I):
+
+        if self.ps is not None:
+            # take output off, set new voltage and current, then turn output back on
+            # ps.write('OUTPUT OFF\n')
+            # self.ps.write('VOLTage:RANGe P25V\n')
+            self.ps.write('APPL %f, %f\n' % (V, I))
+
+            # turn on the output
+            self.ps.write('OUTPUT ON\n')
+            print('Started power supply output.')
+        else:
+            print('Cannot run power supply; power supply did not initialize properly.')
+
+    def read_V_I(self):
+
+        if self.ps is not None:
+            # query power supply for voltage
+            # self.ps.write('MEASURE:VOLTAGE?')
+            measV = self.ps.ask('MEASURE:VOLTAGE?\n')
+            # self.ps.write('++read')
+            voltage = float(measV)
+
+            # query power supply for current
+            # self.ps.write('MEASURE:CURRENT?')
+            measI = self.ps.ask('MEASURE:CURRENT?\n')
+            # self.ps.write('++read') # Reads until timeout. So what might be happening is that its reading more than one value?
+            current = float(measI)
+        else:
+            print('Cannot measure voltage/current; power supply did not initialize properly.')
+            voltage = -1
+            current = -1
+
+        return voltage, current
+
+    def stop(self):
+        if self.ps is not None:
+            self.ps.write('OUTPUT OFF\n')
+            print('Power supply is turned off.')
+        else:
+            print('Power supply did not initialize properly, so it cannot be turned off if on.')
+
+    def disconnect(self):
+        if self.ps is not None:
+            self.stop()
+            self.ps.close()
+            print('Power supply has been disconnected.')
+        else:
+            print('Power supply was not initialized properly, but hopefully is disconnected anyway.')
+
+    def selftest(self):
+
+        # winsound.Beep(440,500)
+        input('put the test resistor on the terminals')
+        print('watch the power supply, see if the voltage or current reaches the specified levels')
+        v = 1;
+        i = 0.005
+        self.run(v, i)
+        print('Desired V, I: %f , %f' % (v, i))
+        time.sleep(3)
+        # winsound.Beep(440,500)
+        v, i = self.read_V_I();
+        print('Actual V, I: %f , %f' % (v, i))
+        time.sleep(3)
+        # winsound.Beep(440,500)
+        nv = 0.4
+        ni = 0.005
+        self.run(nv, ni)
+        print('Desired V, I: %f , %f' % (nv, ni))
+        time.sleep(3)
+        # winsound.Beep(440,500)
+        v, i = self.read_V_I();
+        print('Actual V, I: %f , %f' % (v, i))
+        time.sleep(3)
+        # winsound.Beep(440,500)
+        ps.stop()
+        print('output stopped')
+        time.sleep(3)
+        # winsound.Beep(440,500)
+        v = 1;
+        i = 0.005
+        self.run(v, i)
+        print('Desired V, I: %f , %f' % (v, i))
+        time.sleep(3)
+        # winsound.Beep(440,500)
+        v, i = self.read_V_I();
+        print('Actual V, I: %f , %f' % (v, i))
+        self.stop()
+class Legato100_SP():
+    def __init__(self, sp_port, s_manufacturer, s_volume, factor, use_syringe_pump):
+
+        self.use_flag = use_syringe_pump
+
+        self.motorStalled = False
+
+        if use_syringe_pump is False:
+
+            self.sp = None
+
+        else:
+
+            try:
+                rm = pyvisa.ResourceManager()
+                self.sp = rm.open_resource(sp_port)
+                self.sp.query('echo on')
+                self.sp.query('ver')
+                print('Syringe pump identity: %s , %s' % (sp_port, self.sp.read().strip()))
+            except:
+                print('something went wrong with syringe pump identification.')
+                self.sp = None
+
+            if self.sp is not None:
+                # do the tilt calibration
+                self.sp.query('tilt')
+                print(self.sp.read().strip())
+                print(self.sp.read().strip())
+                self.sp.read()
+
+                # set the force
+                self.sp.query('force %i' % factor)
+
+                # set the syringe volume, manufacturer. May need to do this manually, depending on syringe on hand. See manual.
+                self.sp.query('syrm %s %s' % (s_manufacturer, s_volume))
+                self.sp.query('syrm')
+                print('Syringe type: %s' % self.sp.read().strip())
+
+    def switch_use_syringe_pump(self, input):
+        self.use_flag = input
+
+    def updateFactor(self, input):
+        # NOTE: Check the input AT the text boxes trigger. Then input it into here.
+        self.factor = input
+
+    def set_parameters(self, current_A, infuse_rate, infuse_interval):
+
+        if self.sp is not None:
+            # get pump ready for operation by clearing some counters
+            self.sp.query('civolume')
+            self.sp.query('ctvolume')
+            self.sp.query('citime')
+            self.sp.query('cttime')
+
+            # this is the factor, in mL/(A hr), to find the replenisher.
+            # its hard-coded in so that people don't mess it up on accident.
+
+            factor_A_hr_mL = 0.085  # real value
+
+            # get the limits of the machine for the chosen syringe
+            self.sp.query('irate lim')
+            limits = self.sp.read()
+            limits = limits.split()
+
+            # lim = [numerical value, volume unit, time unit]
+            # official good units: uL/second
+            low_lim = [float(limits[0])] + limits[1].split('/')
+            high_lim = [float(limits[3])] + limits[4].split('/')
+
+            # convert limits of pump with chosen syringe to ul/sec
+            lims = []
+            for lim in [low_lim, high_lim]:
+
+                if lim[1] == 'ml':
+                    factor_v = 10 ** 3
+                elif lim[1] == 'ul':
+                    factor_v = 1
+                elif lim[1] == 'l':
+                    factor_v = 10 ** 6
+                elif lim[1] == 'nl':
+                    factor_v = 10 ** -3
+                elif lim[1] == 'pl':
+                    factor_v = 10 ** -6
+                else:
+                    factor_v = 1
+                    print('unknown volume units in limit')
+
+                if lim[2] == 'hr':
+                    factor_t = 3600
+                elif lim[2] == 'min':
+                    factor_t = 60
+                elif lim[2] == 's':
+                    factor_t = 1
+                else:
+                    factor_t = 1
+                    print('unknown time units in limit')
+
+                lims.append(lim[0] * factor_v / factor_t)
+
+            # how much to infuse every {interval} hours. infuse_volume is in nL.
+            # native units are mL, 10**3 converts to uL
+            infuse_volume = current_A * infuse_interval * factor_A_hr_mL * 1.0 * 10 ** 3
+            print('\nNeed replenisher volume (uL) per interval: %f' % infuse_volume)
+            print('Infuse limits: [ %f, %f ] uL/sec' % (lims[0], lims[1]))
+            print('Desired: infuse rate %f uL/s over %f seconds every %f hours.' % (
+                infuse_rate, 1.0 * infuse_volume / infuse_rate, infuse_interval))
+
+            if infuse_rate > lims[0] and infuse_rate < lims[1]:
+                # print('Desired infuse rate OK')
+                pass
+            elif infuse_rate <= lims[0]:
+                # print('Desired infuse rate too low. Setting infuse rate to lower limit.')
+                infuse_rate = lims[0] * 1.01
+
+            elif infuse_rate >= lims[1]:
+                # print('Desired infuse rate too high. Setting infuse rate to upper limit.')
+                infuse_rate = lims[1] * 0.99
+
+            infuse_time = 1.0 * infuse_volume / infuse_rate
+            print('Set:     infuse rate %f uL/s over %f seconds every %f hours.' % (
+                infuse_rate, infuse_time, infuse_interval))
+
+            # set the parameters
+            self.sp.query('irate %f ul/s' % infuse_rate)
+            self.sp.query('tvolume %f ul' % infuse_volume)
+        else:
+
+            if self.use_flag is True:
+                print('Cannot set parameters; syringe pump was not initialized correctly.')
+
+    def check_rate_volume(self):
+
+        if self.sp is not None:
+            continue_flag = True
+
+            while continue_flag is True:
+
+                time.sleep(1)
+
+                # parse out the status promp
+                self.sp.query('status')
+                status = self.sp.read().strip().split()
+
+                # parsing the integer part
+                curr_rate = float(status[0]) * 1.0 * 10 ** -9  # converting from fL/s to uL/s
+                t = int(status[1]) / 1000.0
+                already_infused_volume = float(status[2]) * 1.0 * 10 ** -9
+
+                # parsing the flag part
+                flag = status[3]
+                if flag[5] == 'T':
+                    print('Pump done. Total infused volume: %.2f uL' % already_infused_volume)
+                    break
+                else:
+                    print('Elapsed time (s): %.2f. Infused volume (uL): %.2f. Rate (uL/s): %.2f.' % (
+                        t, already_infused_volume, curr_rate))
+
+                if flag[2] == 'S':
+                    print('Motor has stalled.')
+                    self.motorStalled = True
+                    break
+
+                # get rid of all the built-up reads from the buffer, if any
+                try:
+                    while True:
+                        self.sp.read()
+                except:
+                    pass
+        else:
+            if self.use_flag is True:
+                print('Cannot check rate or volume; syringe pump was not correctly initialized.')
+            already_infused_volume = 0
+            curr_rate = 0
+
+        return already_infused_volume, curr_rate
+
+    def infuse(self):
+
+        if self.sp is not None:
+            # this gets rid of the pesky "T*" status commands that randomly pop up and screw everything up.
+            self.sp.query('poll on')
+
+            # runs the pump
+            self.sp.query('run')
+        else:
+            if self.use_flag is True:
+                print('Cannot run syringe pump; syringe pump was not initialized properly.')
+
+    def set_rate_volume_directly(self, rate_i, volume_i):
+
+        if self.sp is not None:
+            self.sp.query('irate %f ul/sec' % rate_i)
+            time.sleep(0.1)
+            self.sp.query('tvolume %f ul' % volume_i)
+            time.sleep(0.1)
+        else:
+            if self.use_flag is True:
+                print('Cannot run syringe pump; syringe pump was not initialized properly.')
+
+    def clearbuffer(self):
+
+        if self.sp is not None:
+            try:
+                while True:
+                    self.sp.read()
+            except:
+                pass
+
+    def disconnect(self):
+        if self.sp is not None:
+            self.sp.close()
+            print('Syringe pump has been disconnected.')
+        else:
+
+            if self.use_flag is True:
+                print('Syringe pump was not initialized properly, but hopefully is disconnected anyway.')
+class O2_Sensor():
+    def __init__(self, numReads):
+
+        self.lastVOxy = 5
+        self.lastO2 = 0.02
+
+        ### setup the adc to read the O2 sensor
+        # create the I2C bus
+        try:
+            i2c = busio.I2C(board.SCL, board.SDA)
+            # create the adc object using the I2C bus
+            ads = ADS.ADS1115(i2c)
+            # set the gain (2/3,1,2,4,8,16); probably doesn't do anything since we use the voltage reading directly
+            ads.gain = 1
+        except:
+            print("Something went wrong with 02 Sensor Intialization")
+
+        # create differential input chetween channel 0 and 1. No need to set the gain, we will use the voltage directly.
+        try:
+            self.chan = AnalogIn(ads, ADS.P0, ADS.P1)
+        except:
+            print("Something went wrong with O2 Sensor Initialization")
+
+        # put default values for calibration here
+        self.o2_percent = 20.9  # percentage of O2 in plating lab; since we are close to sea level, I use 20.9
+        self.o2_b = 0  # [V] "base" value that the O2 sensor outputs in 0% O2
+        self.o2_a = 0.011  # [V] "atmospheric" value, that the O2 sensor outputs in normal air, which is 20.9% O2 at sea level
+
+        # calculate conversion factor
+        self.conversion_factor = 0
+        self._calculate_conversion_factor()  # assigns value directly to self.conversion_factor
+
+        # number of reads to do during calibration
+        self.numReads = numReads
+
+        self.startO2 = 50  # Percentage of O2 at start of simulation.
+
+    def updateNumReads(self, numReads):
+        self.numReads = numReads
+
+    def _calculate_conversion_factor(self):
+        # conversion factor to convert volts to O2 concentration
+        print('old conversion factor: %.6f [percent/V]' % (self.conversion_factor))
+        self.conversion_factor = self.o2_percent / (
+                self.o2_a - self.o2_b)  # divide by 1000 to convert o2_a/b from [mV] to [V]
+        print('new conversion factor: %.6f [percent/V]' % (self.conversion_factor))
+
+    def calibrate(self):
+
+        # take ten measurements in normal atmostphere, average, and assign value of 20.9% O2
+        print('old value of o2_a: %.6f [V]' % (self.o2_a))
+        o2_a = 0
+        for ii in range(self.numReads):
+            o2_a += self.chan.voltage
+
+        self.o2_a = o2_a / self.numReads  # get new averaged o2_a value
+
+        print('new value of o2_a: %.6f [V]' % (self.o2_a))
+        self._calculate_conversion_factor()  # calculate new conversion factor
+
+    def read_O2_conc(self, solenoidState):
+        # Spit out fake values of oxygen depending on if the solenoid is closed or not
+        # Doesn't happen in real life, but whatever
+
+        newV_settled = self.lastVOxy
+
+        if solenoidState == "Open":
+            garbage = random.uniform(-0.3, 0)
+        if solenoidState == "Closed":
+            garbage = random.uniform(0.1, 0.9)
+
+        newO2perc_settled = self.lastO2 + garbage
+        print("Old O2: " + str(self.lastO2))
+        print("New O2: " + str(newO2perc_settled))
+        self.lastO2 = newO2perc_settled
+
+        # newV_settled = 0
+        # newO2perc_settled = 0
+        # for ii in range(self.numReads):
+        #     newV = self.chan.voltage
+        #     new_O2_perc_value = newV * self.conversion_factor
+        #
+        #     newV_settled += newV
+        #     newO2perc_settled += new_O2_perc_value
+        #     time.sleep(0.01)
+        #
+        # # gets average
+        # newV_settled = newV_settled / self.numReads
+        # newO2perc_settled = newO2perc_settled / self.numReads
+
+        return newV_settled, newO2perc_settled
+class Solenoid_Controller():
+    def __init__(self):
+        ## initial setup
+        self.control_pin = 37
+        self.status = 0  # 0 is closed, 1 is open
+
+        # set the board pin number address scheme. We want to use pin 37 for signal. The ground is plugged into pin 39 (doesn't need to be controlled, obviously)
+        GPIO.setmode(GPIO.BOARD)
+
+        # set up pin 37 as output
+        GPIO.setup(self.control_pin, GPIO.OUT)
+
+    def open_solenoid(self):
+        # Let out oxygen
+        GPIO.output(self.control_pin, GPIO.HIGH)
+        self.status = 1
+
+        # Tell the monitor loop to send
+        return
+
+    def close_solenoid(self):
+        # Let in oxygen
+        GPIO.output(self.control_pin, GPIO.LOW)
+        self.status = 0
+
+    def cleanup(self):
+        if self.status == 1:  # if its open, shut it before continuing
+            self.close_solenoid()
+        GPIO.cleanup()
 
 class NotifyCSingle():
     '''
@@ -684,10 +792,10 @@ class NotifyCSingle():
         # Hardcoded things
         self.fromEmail = "stl.electroplating@gmail.com"
         self.toEmail = ["spokosison@gmail.com"]
-        self.pathToScreenshot = "C:\\Users\\Thomas Sison\\Pictures"
+        self.pathToScreenshot = "C:\\Users\\Gabriele Domingo\\Pictures"
         self.nameScreenshot = 'platingCheck.png'
-        self.pathToCredentials = "C:\\Users\\Thomas Sison\\Desktop\\credentials.json"
-        self.dirToPickle = "C:\\Users\\Thomas Sison\\Desktop"
+        self.pathToCredentials = "C:\\Users\\Gabriele Domingo\\Desktop\\credentials.json"
+        self.dirToPickle = "C:\\Users\\Gabriele Domingo\\Desktop"
 
     # Create googleEmailAPI functions for message protocol. Won't need to be used outside of this class? (Hopefully)
     def get_service(self,pathToCredentials, dirToPickle):
@@ -898,679 +1006,445 @@ class NotifyCSingle():
 
         return [notify_time_ref, notify_time]
 
+class monitorApp(tk.Frame):
+    ## Important problem
+    # Incorporating the pause difference into things inside the loop
 
-class E3631A_PS():
-    def __init__(self, channel, ps_port, ps_ident):
+    def __init__(self,parent,ps,Notify,V_set,I_set,ps_checking_interval,infuseInterval,infuseRate,okNotifyIntervalMin,
+                 error_notify_interval_def,sp,Solenoid,OxySensor,numReads,solenoidLowBound,solenoidHighBound):
+        tk.Frame.__init__(self,parent,width="100",height="100")
 
-        # save identification
-        self.ident = ps_ident
+        self.platingType = ""
+        self.useSolenoidandOxy = False
 
-        # open up Resource Manager
-        # rm = pyvisa.ResourceManager('@py')
+        ## Important subobjects
+        self.ps = ps
+        self.sp = sp
+        self.Notify = Notify
+        self.Solenoid = Solenoid
+        self.OxySensor = OxySensor
 
-        # open up the right channel
-        # the USB resource needs to be figured out beforehand, there is no way to figure out which power supply is
+        ## Parameters for the power supply
+        self.vTar = V_set[0]
+        self.iTar = I_set
+        self.vHigh = V_set[2]
+        self.vLow = V_set[1]
+        self.ps_checking_interval = ps_checking_interval ## MAIN Time interval for a lot of the code, a lot of other
+                                                         ## actions will be dependent on this (def: 5)
 
-        self.startI = -8
-        self.startV = -8
+        ## Parameters for the syringe pump
+        self.infuseInterval = infuseInterval
+        self.infuseRate = infuseRate
+        self.infusionDone = False
+        self.startInfusionTime = 10 # Time when we want to start the infusion in something
 
-        # try:
-        #     # ps = rm.open_resource(ps_port)
-        #     #
-        #     # # set address and protocol
-        #     # ps.write('++addr %i' % channel)
-        #     # ps.write('++eos 0')
-        #     # time.sleep(0.01)
-        #     #
-        #     # # try to get a response from power supply, in this case its identity
-        #     # ps.write('*IDN?')
-        #     # ps.write('++read')
-        #     # print('Power supply identity: %s , %s' % (ps_port, ps.read().strip()))
-        #     #
-        #     # # save communication instance into class variable
-        #     # self.ps = ps
-        # except:
-        #     print('Something went wrong with power supply initialization.')
-        #     self.ps = None
+        ## Parameters for 02 sensor
+        self.numReads = numReads
 
-    def run(self, V, I):
+        ## Parameters for the solenoid
+        self.solenoidStartTime = 0
+        self.solenoidLowBound = solenoidLowBound # Percentages
+        self.solenoidHighBound = solenoidHighBound
 
-        # if self.ps is not None:
+        ## Parameters for the notifyClass
+        self.okNotifyIntervalMin = okNotifyIntervalMin # Minutes between standard notifications
+        self.errorNotifyInterval = error_notify_interval_def # Minimum minutes between the monitorApp sending an error notificiation
+        self.error_notify_count = 0 # Total number of errors occured during a run
+        self.error_notify_cnt_MAX = 8 # Max TOTAL number of errors, not sure if I'm even gonna use this
+        self.lastStandardNotifyTime = 0 # Last STANDARD notification time
+        self.lastErrorNotifyTime = 0
+        self.failLast20Min = 0
+        self.failLast20Threshold = 20
 
-            self.startI = I
-            self.startV = V
+        ## Parameters for internal timing
+        self.startTime = time.time()
+        self.pauseState = 0
+        self.fromPause = 0
+        self.startPauseTime = 0
+        self.stopPauseTime = 0
+        self.pauseDiff = 0
 
-            self.lastI = self.startI
-            self.lastV = self.startV
+        self.doReplenishment = False
+        self.sendReplenishUpdates = False
 
-            # take output off, set new voltage and current, then turn output back on
-            # ps.write('OUTPUT OFF')
-            # self.ps.write('APPL P6V, %f, %f' % (V, I))
-            #
-            # # check if output is already on
-            # self.ps.write('OUTPUT?')/
-            # self.ps.write('++read')
-            # on_flag = self.ps.read().strip()
-            #
-            # if on_flag == '0':
-            #     self.ps.write('OUTPUT ON')
+        ## Parameters for plotting the voltage and current
+        self.x_data, self.y_data = [], []
+        self.tPlot, self.aPlot, self.bPlot = [], [], []
+        self.figure = plt.figure()
+        self.p1 = self.figure.add_subplot(111)
+        self.line1, = plt.plot(self.tPlot, self.aPlot, '-')
+        self.line2, = plt.plot(self.tPlot,self.bPlot, '-')
 
-            print('Started power supply output.')
-        # else:
-        #     print('Cannot run power supply; power supply did not initialize properly.')
+    def __str__(self):
+        return "I am alive, is nice."
 
-    def read_V_I(self):
+    def __repr__(self):
+        return "I am alive, is nice"
 
-        # if self.ps is not None:
-        V_vary = random.uniform(-0.05,0.05)
-        I_vary = random.uniform(-1, 1)
+    def printParams(self):
+        print("\nPRINTING CURRENT PARAMETERS \n")
+        print("TARGET VOLTAGE (Volts): " + str(self.vTar))
+        print("TARGET CURRENT (Amps): " + str(self.iTar))
+        print("HIGH VOLTAGE BOUND (Volts): " + str(self.vHigh))
+        print("LOW VOLTAGE BOUND (Volts): " + str(self.vLow))
+        print("POWER SUPPLY CHECKING INTERVAL (Seconds): " + str(self.ps_checking_interval))
+        print("SYRINGE INFUSION INTERVAL (Hours): " + str(self.infuseInterval))
+        print("SYRINGE INFUSION RATE ([some prefix]L/s): " + str(self.infuseRate))
+        print("NUMBER OF OXYGEN READS TO CALIBRATE: " + str(self.numReads))
+        print("SOLENOID LOW BOUND (%): " + str(self.solenoidLowBound))
+        print("SOLENOID HIGH BOUND (%): " + str(self.solenoidHighBound))
+        print("STANDARD NOTIFY INTERVAL (minutes): " + str(self.okNotifyIntervalMin))
+        print("ERROR NOTIFY INTERVAL (minutes): " + str(self.errorNotifyInterval))
+        print("")
+        print("Plating type: " + self.platingType)
+        print("Use Solenoid and Oxygen Sensor? " + str(self.useSolenoidandOxy))
 
-            # # query power supply for voltage
-            # self.ps.write('MEAS:VOLT? P6V')
-            # self.ps.write('++read')
-            # voltage = float(self.ps.read().strip())
-            #
-            # # query power supply for current
-            # self.ps.write('MEAS:CURR? P6V')
-            # self.ps.write('++read')
-            # current = float(self.ps.read().strip())
+    def setParams(self,
+                  vTar,
+                  iTar,
+                  vHigh,
+                  vLow,
+                  ps_checking_interval,
+                  infuseInterval,
+                  infuseRate,
+                  replenishUpdateInterval,
+                  numReads,
+                  solenoidLowBound,
+                  solenoidHighBound,
+                  okNotifyIntervalMin,
+                  errorNotifyInterval,
+                  plateOption,
+                  solenoidOn):
+        # Power Supply
+        self.vTar = vTar
+        self.iTar = iTar
+        self.vHigh = vHigh
+        self.vLow = vLow
+        self.ps_checking_interval = ps_checking_interval
 
-        voltage = self.lastV + V_vary
-        current = self.lastI + I_vary
+        # Syringe Pump
+        self.infuseInterval = infuseInterval
+        self.infuseRate = infuseRate
+        self.replenishUpdateInterval = replenishUpdateInterval
 
-        self.lastV = voltage
-        self.lastI = current
+        # O2 Sensor
+        self.numReads = numReads
 
-        # else:
-        #     print('Cannot measure voltage/current; power supply did not initialize properly.')
-        #     voltage = 1
-        #     current = 1
+        # Solenoid
+        self.solenoidLowBound = solenoidLowBound
+        self.solenoidHighBound = solenoidHighBound
+        
+        self.solenoidClosedFlag = False #Flags triggered when the solenoid is closed or open in order to prevent Solenoid code from being repeated
+        self.solenoidOpenedFlag = False 
 
-        return voltage, current
+        # Notify Class
+        self.okNotifyIntervalMin = okNotifyIntervalMin
+        self.errorNotifyInterval = errorNotifyInterval
 
-    def stop(self):
-        if self.ps is not None:
-            self.ps.write('OUTPUT OFF')
-            print('Power supply is turned off.')
-        else:
-            print('Power supply did not initialize properly, so it cannot be turned off if on.')
+        self.platingType = plateOption
 
-    def disconnect(self):
-        if self.ps is not None:
-            self.ps.close()
-            print('Power supply has been disconnected.')
-        else:
-            print('Power supply was not initialized properly, but hopefully is disconnected anyway.')
+        if solenoidOn == 1:
+            self.useSolenoidandOxy = True
+        if solenoidOn == 0:
+            self.useSolenoidandOxy = False
 
 
-class E3634A_PS():
-    def __init__(self, channel, ps_port, ps_ident):
+    def openSolenoid(self):
+        self.Solenoid.open_solenoid()
 
-        # save identification
-        self.ident = ps_ident
+    def closeSolenoid(self):
+        self.Solenoid.close_solenoid()
 
-        # open up Resource Manager
-        rm = pyvisa.ResourceManager('@py')
+    def getPauseDiff(self):
+        return self.pauseDiff
 
-        # open up the right channel
-        # the USB resource needs to be figured out beforehand, there is no way to figure out which power supply is
-        try:
-            ps = rm.open_resource(ps_port)
+    def getPauseState(self):
+        return self.pauseState
 
-            # set address and protocol
-            ps.write('++addr %i' % channel)
-            ps.write('++eos 0')
-            time.sleep(0.01)
+    def startMonitor(self):
+        self.ps.run(self.vTar,self.iTar)
 
-            # try to get a response from power supply, in this case its identity
-            ps.write('*IDN?')
-            ps.write('++read')
-            print('Power supply identity: %s , %s' % (ps_port, ps.read().strip()))
+        self.startTime = time.time()
+        self.oldTime = self.startTime
+        self.lastInfuseTime = self.startTime
+        self.lastStandardNotifyTime = self.startTime
+        self.lastErrorNotifyTime = self.startTime
+        self.nowTime = self.startTime
+        self.totalI = 0
 
-            # save communication instance into class variable
-            self.ps = ps
-        except:
-            print('Something went wrong with power supply initialization.')
-            self.ps = None
+        self.vOld = self.vTar
+        self.iOld = self.iTar
 
-    def run(self, V, I):
+        self.solenoidState = "Open"
+        self.solenoidClosedFlag = False
+        self.loopThing()
 
-        if self.ps is not None:
-            # take output off, set new voltage and current, then turn output back on
-            # ps.write('OUTPUT OFF')
-            self.ps.write('VOLTage:RANGe P25V')
-            self.ps.write('APPL %f, %f' % (V, I))
+    def pauseMonitor(self):
+        if self.pauseState == 0:
+            self.pauseState = 1
+            self.startPauseTime = time.time()
 
-            # turn on the output
-            self.ps.write('OUTPUT ON')
-            print('Started power supply output.')
-        else:
-            print('Cannot run power supply; power supply did not initialize properly.')
+            self.ps.run(0,0)
 
-    def read_V_I(self):
+            self.callback
+            return
+        if self.pauseState == 1:
+            self.pauseState = 0
+            self.fromPause = 1
 
-        if self.ps is not None:
-            # query power supply for voltage
-            self.ps.write('MEASURE:VOLTAGE?')
-            self.ps.write('++read')
-            voltage = float(self.ps.read().strip())
+            self.stopPauseTime = time.time()
 
-            # query power supply for current
-            self.ps.write('MEASURE:CURRENT?')
-            self.ps.write('++read')
-            current = float(self.ps.read().strip())
-        else:
-            print('Cannot measure voltage/current; power supply did not initialize properly.')
-            voltage = 1
-            current = 1
+            self.pauseDiff += self.stopPauseTime - self.startPauseTime
 
-        return voltage, current
+            self.ps.run(self.vTar, self.iTar)
 
-    def stop(self):
-        if self.ps is not None:
-            self.ps.write('OUTPUT OFF')
-            print('Power supply is turned off.')
-        else:
-            print('Power supply did not initialize properly, so it cannot be turned off if on.')
+            self.callback
+            return
 
-    def disconnect(self):
-        if self.ps is not None:
-            self.ps.close()
-            print('Power supply has been disconnected.')
-        else:
-            print('Power supply was not initialized properly, but hopefully is disconnected anyway.')
+    def stopMonitor(self):
+        self.ps.stop()
+        # Do some stuff of saving the graph and turning off the power supply
+        st = datetime.now()
 
-class E36105B_PS():
-    def __init__(self, channel, ps_port, ps_ident):
+        #self.figure.savefig("IV_Plot_",st)
+        self.infusionDone = False
+        self.currentInfusions = 0
 
-        # save identification
-        self.ident = ps_ident
+        self.after_cancel(self.callback)
+        return
 
-        # open up Resource Manager
-        # rm = pyvisa.ResourceManager('@py')
+    def loopThing(self):
+        '''
+        Pseudocode:
+        Save old time
+        Get new time
+        save important time deltas
 
-        # open up the right channel
-        # the USB resource needs to be figured out beforehand, there is no way to figure out which power supply is
-        try:
-            ps = usbtmc.Instrument(ps_port)
+        toPlotTime: Time to be sent to the plotting routine (DOES NOT ACCOUNT FOR WHEN THE monitorAPP is paused)
+        tempTimeDelta = the time since our last point of reference (ACCOUNTS FOR WHEN THE monitorAPP is paused)
+        solenoidOpened/Closed Flag: Flags that trigger when the solenoid switches state. Used to make sure they don't accidently trigger the other case
 
-            # set address and protocol
-            # ps.write('++addr %i'%channel)
-            # ps.write('++eos 0') #Append CR+LF (ASCII 13 & 10 respectively) to instrument commands
-            time.sleep(0.01)
+        Power supply checking, error case flow:
 
-            # try to get a response from power supply, in this case its identity
-            idn = ps.ask('*IDN?\n')
-            # ps.write('++read')
-            print('Power supply identity: %s , %s' % (ps_port, idn))
+            -Attempt to read from power supply
+                -Couldn't read from power supply?
+                    -Add a fail to the last20Min count
+                    -Are we above our threshold?
+                        *NOTIFY CASE: FAIL THRESHOLD REACHED
 
-            # save communication instance into class variable
-            self.ps = ps
-        except:
-            print('Something went wrong with power supply initialization.')
-            self.ps = None
+                -Succesfully read power supply
+                    -Check if our voltage is out of bounds
+                        -Add a fail to last20Min count
+                        -Are we above our threshold?
+                            *NOTIFY CASE: FAIL THRESHOLD REACHED
+                        -Has it been more than errorNotifyInterval minutes since we last complained?
+                            *NOTIFY CASE: VOLTAGE READING OUT OF BOUNDS
+                    -Check if our current is out of bounds
+                        -Add a fail to last20Min count
+                        -Are we above our threshold?
+                            *NOTIFY CASE: FAIL THRESHOLD REACHED
+                        -Has it been more than errorNotifyInterval minutes since we last complained?
+                            *NOTIFY CASE: VOLTAGE READING OUT OF BOUNDS
 
-    def run(self, V, I):
+                    -Else we good, continue to the rest of the loop
 
-        if self.ps is not None:
-            # take output off, set new voltage and current, then turn output back on
-            # ps.write('OUTPUT OFF\n')
-            # self.ps.write('VOLTage:RANGe P25V\n')
-            self.ps.write('APPL %f, %f\n' % (V, I))
+        '''
 
-            # turn on the output
-            self.ps.write('OUTPUT ON\n')
-            print('Started power supply output.')
-        else:
-            print('Cannot run power supply; power supply did not initialize properly.')
+        self.oldTime = self.nowTime
+        self.nowTime = time.time()
+        toPlotTime = self.nowTime - self.startTime
 
-    def read_V_I(self):
+        # Check if it is time to send a notification
+        tempTimeDelta = self.nowTime - self.lastStandardNotifyTime - self.pauseDiff
+        tempInfusedamtq = 0
 
-        if self.ps is not None:
-            # query power supply for voltage
-            # self.ps.write('MEASURE:VOLTAGE?')
-            measV = self.ps.ask('MEASURE:VOLTAGE?\n')
-            # self.ps.write('++read')
-            voltage = float(measV)
+        # PERMALLOY & IF its checkbox is ticked
+        ### Check if we need to close or open the solenoid
+        # Read 02 sensor
 
-            # query power supply for current
-            # self.ps.write('MEASURE:CURRENT?')
-            measI = self.ps.ask('MEASURE:CURRENT?\n')
-            # self.ps.write('++read') # Reads until timeout. So what might be happening is that its reading more than one value?
-            current = float(measI)
-        else:
-            print('Cannot measure voltage/current; power supply did not initialize properly.')
-            voltage = -1
-            current = -1
+        if self.platingType == "PERMALLOY" and self.useSolenoidandOxy == True:
+            newVOxy, newO2 = self.OxySensor.read_O2_conc(self.solenoidState)
+            # if 02 > 2%
+            if newO2 > self.solenoidHighBound and self.solenoidOpenedFlag == False:
+                #   Run open solenoid
+                print("Opening Solenoid")
+                self.solenoidState = "Open"
+                self.Solenoid.open_solenoid()
+                self.solenoidStartTime = time.time()
 
-        return voltage, current
+                self.solenoidClosedFlag = False
+                self.solenoidOpenedFlag = True
 
-    def stop(self):
-        if self.ps is not None:
-            self.ps.write('OUTPUT OFF\n')
-            print('Power supply is turned off.')
-        else:
-            print('Power supply did not initialize properly, so it cannot be turned off if on.')
+            # if 02 < 0.5% or ran for more than 5 minutes
+            if newO2 < self.solenoidLowBound or (self.nowTime - self.solenoidStartTime) / 60.0 > 5 and self.solenoidClosedFlag == False:
+                #   Run close solenoid
+                print("Closing Solenoid")
+                self.solenoidState = "Closed"
+                self.Solenoid.close_solenoid()
 
-    def disconnect(self):
-        if self.ps is not None:
-            self.stop()
-            self.ps.close()
-            print('Power supply has been disconnected.')
-        else:
-            print('Power supply was not initialized properly, but hopefully is disconnected anyway.')
+                self.solenoidClosedFlag = True
+                self.solenoidOpenedFlag = False
 
-    def selftest(self):
+        successfulRead = True
+        timeErrorDelta = self.nowTime - self.lastErrorNotifyTime - self.pauseDiff
 
-        # winsound.Beep(440,500)
-        input('put the test resistor on the terminals')
-        print('watch the power supply, see if the voltage or current reaches the specified levels')
-        v = 1;
-        i = 0.005
-        self.run(v, i)
-        print('Desired V, I: %f , %f' % (v, i))
-        time.sleep(3)
-        # winsound.Beep(440,500)
-        v, i = self.read_V_I();
-        print('Actual V, I: %f , %f' % (v, i))
-        time.sleep(3)
-        # winsound.Beep(440,500)
-        nv = 0.4
-        ni = 0.005
-        self.run(nv, ni)
-        print('Desired V, I: %f , %f' % (nv, ni))
-        time.sleep(3)
-        # winsound.Beep(440,500)
-        v, i = self.read_V_I();
-        print('Actual V, I: %f , %f' % (v, i))
-        time.sleep(3)
-        # winsound.Beep(440,500)
-        ps.stop()
-        print('output stopped')
-        time.sleep(3)
-        # winsound.Beep(440,500)
-        v = 1;
-        i = 0.005
-        self.run(v, i)
-        print('Desired V, I: %f , %f' % (v, i))
-        time.sleep(3)
-        # winsound.Beep(440,500)
-        v, i = self.read_V_I();
-        print('Actual V, I: %f , %f' % (v, i))
-        self.stop()
+        print("")
+        print("Now Time: " + str(self.nowTime))
+        print("Old Time: " + str(self.oldTime))
+        print("Last Error Notification: " + str(self.lastErrorNotifyTime))
+        print("tempTimeDelta: " + str(tempTimeDelta))
 
-class Legato100_SP():
-    def __init__(self, sp_port, s_manufacturer, s_volume, factor, use_syringe_pump):
-
-        self.use_flag = use_syringe_pump
-
-        self.motorStalled = False
-
-        if use_syringe_pump is False:
-
-            self.sp = None
-
-        else:
-
-            try:
-                rm = pyvisa.ResourceManager()
-                self.sp = rm.open_resource(sp_port)
-                self.sp.query('echo on')
-                self.sp.query('ver')
-                print('Syringe pump identity: %s , %s' % (sp_port, self.sp.read().strip()))
+        #Attempt to read the power supply
+        if self.pauseState == 0:
+            try: vNew, iNew = self.ps.read_V_I()
             except:
-                print('something went wrong with syringe pump identification.')
-                self.sp = None
+                vNew = self.vOld
+                iNew = self.iOld
 
-            if self.sp is not None:
-                # do the tilt calibration
-                self.sp.query('tilt')
-                print(self.sp.read().strip())
-                print(self.sp.read().strip())
-                self.sp.read()
+                self.failLast20Min = self.failLast20Min + 1
+                successfulRead = False
+                print("Failed to get measurment - sleeping and skipping to next iteration hoping that the problem was not fatal")
 
-                # set the force
-                self.sp.query('force %i' % factor)
-
-                # set the syringe volume, manufacturer. May need to do this manually, depending on syringe on hand. See manual.
-                self.sp.query('syrm %s %s' % (s_manufacturer, s_volume))
-                self.sp.query('syrm')
-                print('Syringe type: %s' % self.sp.read().strip())
-
-    def switch_use_syringe_pump(self,input):
-        self.use_flag = input
-
-    def updateFactor(self,input):
-        # NOTE: Check the input AT the text boxes trigger. Then input it into here.
-        self.factor = input
-
-    def set_parameters(self, current_A, infuse_rate, infuse_interval):
-
-        if self.sp is not None:
-            # get pump ready for operation by clearing some counters
-            self.sp.query('civolume')
-            self.sp.query('ctvolume')
-            self.sp.query('citime')
-            self.sp.query('cttime')
-
-            # this is the factor, in mL/(A hr), to find the replenisher.
-            # its hard-coded in so that people don't mess it up on accident.
-
-            factor_A_hr_mL = 0.085  # real value
-
-            # get the limits of the machine for the chosen syringe
-            self.sp.query('irate lim')
-            limits = self.sp.read()
-            limits = limits.split()
-
-            # lim = [numerical value, volume unit, time unit]
-            # official good units: uL/second
-            low_lim = [float(limits[0])] + limits[1].split('/')
-            high_lim = [float(limits[3])] + limits[4].split('/')
-
-            # convert limits of pump with chosen syringe to ul/sec
-            lims = []
-            for lim in [low_lim, high_lim]:
-
-                if lim[1] == 'ml':
-                    factor_v = 10 ** 3
-                elif lim[1] == 'ul':
-                    factor_v = 1
-                elif lim[1] == 'l':
-                    factor_v = 10 ** 6
-                elif lim[1] == 'nl':
-                    factor_v = 10 ** -3
-                elif lim[1] == 'pl':
-                    factor_v = 10 ** -6
-                else:
-                    factor_v = 1
-                    print('unknown volume units in limit')
-
-                if lim[2] == 'hr':
-                    factor_t = 3600
-                elif lim[2] == 'min':
-                    factor_t = 60
-                elif lim[2] == 's':
-                    factor_t = 1
-                else:
-                    factor_t = 1
-                    print('unknown time units in limit')
-
-                lims.append(lim[0] * factor_v / factor_t)
-
-            # how much to infuse every {interval} hours. infuse_volume is in nL.
-            # native units are mL, 10**3 converts to uL
-            infuse_volume = current_A * infuse_interval * factor_A_hr_mL * 1.0 * 10 ** 3
-            print('\nNeed replenisher volume (uL) per interval: %f' % infuse_volume)
-            print('Infuse limits: [ %f, %f ] uL/sec' % (lims[0], lims[1]))
-            print('Desired: infuse rate %f uL/s over %f seconds every %f hours.' % (
-            infuse_rate, 1.0 * infuse_volume / infuse_rate, infuse_interval))
-
-            if infuse_rate > lims[0] and infuse_rate < lims[1]:
-                # print('Desired infuse rate OK')
-                pass
-            elif infuse_rate <= lims[0]:
-                # print('Desired infuse rate too low. Setting infuse rate to lower limit.')
-                infuse_rate = lims[0] * 1.01
-
-            elif infuse_rate >= lims[1]:
-                # print('Desired infuse rate too high. Setting infuse rate to upper limit.')
-                infuse_rate = lims[1] * 0.99
-
-            infuse_time = 1.0 * infuse_volume / infuse_rate
-            print('Set:     infuse rate %f uL/s over %f seconds every %f hours.' % (
-            infuse_rate, infuse_time, infuse_interval))
-
-            # set the parameters
-            self.sp.query('irate %f ul/s' % infuse_rate)
-            self.sp.query('tvolume %f ul' % infuse_volume)
-        else:
-
-            if self.use_flag is True:
-                print('Cannot set parameters; syringe pump was not initialized correctly.')
-
-    def check_rate_volume(self):
-
-        if self.sp is not None:
-            continue_flag = True
-
-            while continue_flag is True:
-
-                time.sleep(1)
-
-                # parse out the status promp
-                self.sp.query('status')
-                status = self.sp.read().strip().split()
-
-                # parsing the integer part
-                curr_rate = float(status[0]) * 1.0 * 10 ** -9  # converting from fL/s to uL/s
-                t = int(status[1]) / 1000.0
-                already_infused_volume = float(status[2]) * 1.0 * 10 ** -9
-
-                # parsing the flag part
-                flag = status[3]
-                if flag[5] == 'T':
-                    print('Pump done. Total infused volume: %.2f uL' % already_infused_volume)
-                    break
-                else:
-                    print('Elapsed time (s): %.2f. Infused volume (uL): %.2f. Rate (uL/s): %.2f.' % (
-                    t, already_infused_volume, curr_rate))
-
-                if flag[2] == 'S':
-                    print('Motor has stalled.')
-                    self.motorStalled = True
-                    break
-
-                # get rid of all the built-up reads from the buffer, if any
-                try:
-                    while True:
-                        self.sp.read()
-                except:
+                if float(timeErrorDelta/60) > float(self.errorNotifyInterval):
+                    self.Notify.notify("Reading Failed",vNew,iNew,tempInfusedamtq,'',[0, 0])
+                if self.failLast20Min > self.failLast20Threshold:
+                    self.Notify.notify("Fail Threshold Reached", vNew,iNew,tempInfusedamtq,'',[0,0])
+                    # NOTIFY CASE: FAIL THRESHOLD REACHED
                     pass
-        else:
-            if self.use_flag is True:
-                print('Cannot check rate or volume; syringe pump was not correctly initialized.')
-            already_infused_volume = 0
-            curr_rate = 0
 
-        return already_infused_volume, curr_rate
+        self.vOld = vNew
+        self.iOld = iNew
 
-    def infuse(self):
+        print("Time since last error message (min): " + str(timeErrorDelta))
 
-        if self.sp is not None:
-            # this gets rid of the pesky "T*" status commands that randomly pop up and screw everything up.
-            self.sp.query('poll on')
+        print("Fail last 20 min: " + str(self.failLast20Min))
+        #print("Current out of bounds? " + str(iNew < (self.iTar - self.iTar * 0.1) or iNew > (self.iTar + self.iTar * 0.1)))
 
-            # runs the pump
-            self.sp.query('run')
-        else:
-            if self.use_flag is True:
-                print('Cannot run syringe pump; syringe pump was not initialized properly.')
+        if successfulRead == True and self.pauseState == 0:
+            if self.failLast20Min > self.failLast20Threshold:
+                self.Notify.notify("Fail Threshold Reached",vNew,iNew,tempInfusedamtq,'',[0, 0],self.failLast20Min)
 
-    def set_rate_volume_directly(self, rate_i, volume_i):
+            if tempTimeDelta / 60 >= 20 and self.pauseState == 0:
+                self.lastStandardNotifyTime = time.time()  # Place a time new reference to create notifications from
+                self.failLast20Min = 0
+                self.Notify.notify("Standard", vNew, iNew, tempInfusedamtq, '', [0, 0],self.failLast20Min)
 
-        if self.sp is not None:
-            self.sp.query('irate %f ul/sec' % rate_i)
-            time.sleep(0.1)
-            self.sp.query('tvolume %f ul' % volume_i)
-            time.sleep(0.1)
-        else:
-            if self.use_flag is True:
-                print('Cannot run syringe pump; syringe pump was not initialized properly.')
+                # NOTIFY CASE: STANDARD CASE
 
-    def clearbuffer(self):
+            if tempTimeDelta / 60 >= self.okNotifyIntervalMin and self.pauseState == 0:
+                self.lastStandardNotifyTime = time.time()
+                # NOTIFY CASE: STANDARD 20 MIN
+                self.Notify.notify("Standard", vNew, iNew, tempInfusedamtq, '', [0, 0],self.failLast20Min)
+                self.failLast20Min = 0
 
-        if self.sp is not None:
-            try:
-                while True:
-                    self.sp.read()
-            except:
-                pass
+            if vNew > self.vHigh or vNew < self.vLow:
+                if self.failLast20Min == 0:  # Send a notification error for the first time in 20 minutes regardless
+                    # NOTIFY CASE: VOLTAGE OUT OF BOUNDS
+                    self.lastErrorNotifyTime = time.time()
+                    print("Sending 1st Out of Bounds Message")
+                    self.Notify.notify("Voltage Out of Bounds", vNew, iNew, tempInfusedamtq, '', [0, 0],self.failLast20Min)
+                    pass
+                if (self.nowTime-self.lastErrorNotifyTime)/60 >= self.errorNotifyInterval:
+                    # NOTIFY CASE: VOLTAGE OUT OF BOUNDS
+                    print("Sending 2nd+ Out of Bounds Message")
+                    self.Notify.notify("Voltage Out of Bounds", vNew, iNew, tempInfusedamtq, '', [0, 0],self.failLast20Min)
+                    self.lastErrorNotifyTime = time.time()
+                    pass
+                self.failLast20Min = self.failLast20Min + 1
 
-    def disconnect(self):
-        if self.sp is not None:
-            self.sp.close()
-            print('Syringe pump has been disconnected.')
-        else:
+            if iNew < (self.iTar - self.iTar * 0.1) or iNew > (self.iTar + self.iTar * 0.1):
 
-            if self.use_flag is True:
-                print('Syringe pump was not initialized properly, but hopefully is disconnected anyway.')
+                self.lastErrorNotifyTime = time.time()
+                if self.failLast20Min == 0:
+                    # NOTIFY CASE: CURRENT OUT OF BOUNDS
+                    self.lastErrorNotifyTime = time.time()
+                    self.Notify.notify("Current outside range", vNew, iNew, tempInfusedamtq, '', [0, 0],self.failLast20Min)
+                    pass
+                if (self.nowTime-self.lastErrorNotifyTime)/60 >= self.errorNotifyInterval:
+                    # NOTIFY CASE: CURRENT OUT OF BOUNDS
+                    self.lastErrorNotifyTime = time.time()
+                    self.Notify.notify("Current outside range", vNew, iNew, tempInfusedamtq, '', [0, 0],self.failLast20Min)
+                    pass
+                self.failLast20Min = self.failLast20Min + 1
 
-# def ps_monitorSingle(ps,Notify,
-#                      V_set,I_set,
-#                      ps_checking_interval,infuseInterval,infuseRate,notifyIntervalMin,sp):
-#     ps.run(V_set,I_set)
-#     plt.show()
-#     time.sleep(0.2)
-#
-#     ## Setup reference times
-#     startTime = time.time()
-#
-#     infuseTimerReference = time.time()
-#
-#     lastReadTime = startTime
-#     lastPlotTime = startTime
-#     lastNotifyTime = startTime
-#
-#     ## Setup arrays to plot our power supply data to
-#     tPlot = []
-#     vPlot = []
-#     iPlot = []
-#
-#     totalI = 0 #What this do?
-#
-#     stopFlag = False #Not sure how to use this yet but will probably be useful
-#                     # Still not sure how I'm gonna use this
-#
-#
-#     level1FailLast20 = 0
-#     level1Threshold = 50
-#
-#     pauseFlag = 0
-#     # Start new def here for the loops
-#     def runloop():
-#         while not stopFlag:
-#
-#             if pauseFlag:
-#                 time.sleep(0.01)
-#                 continue
-#
-#
-#             # Get our new times
-#             oldTime = newTime
-#             newTime = time.time()
-#             totalTime = newTime - startTime
-#
-#             # Check if it is time to send a notification
-#             tempTimeDelta = newTime - lastNotifyTime
-#             if tempTimeDelta.total_seconds()/60 >= notifyIntervalMin:
-#                 # Check the number of level 1 errors in the last 20 minutes
-#                 if level1FailLast20 > level1Threshold:
-#                     #Send a message
-#                     msg = "We have X number of level 1 errors"
-#                     Notify.notify()
-#                     print("Bad notification")
-#                 else:
-#                     # Send notification that everything is fine
-#                     print("Good notificiation")
-#
-#                 level1FailLast20 = 0
-#
-#             #Attempt to read the power supply
-#             try: vNew, iNew = ps.read_V_I()
-#             except:
-#                 failLast20Min = failLast20Min + 1
-#                 print("Failed to get measurment - sleeping and skipping to next iteration hoping that the problem was not fatal")
-#
-#                 if not stopFlag:
-#                     time.sleep(ps_checking_interval)
-#                 continue
-#
-#             #Print the stuff to a file. Do later
-#
-#             # CHECK INFUSE TIMER CONDITION
-#             if(newTime - infuseTimerReference)/3600.0 > infuseInterval:
-#                 totalT = newTime - infuseTimerReference
-#
-#             # take the total I and divide it by the total time to get the average current over the time period
-#                 try:
-#                     I_avg = (total_I) / totalT
-#                 except:
-#                     I_avg = 0
-#
-#                 # reset the reference timer and total_I
-#                 infuseTimerReference = newTime
-#                 total_I = 0
-#
-#                 # set the infuse parameters and run the pump
-#                 sp.set_parameters(I_avg, infuseRate, infuseInterval)
-#                 time.sleep(0.1)
-#                 sp.infuse()
-#
-#                 # # monitor the infusion
-#                 # infused_volume, infuse_rate = sp.check_rate_volume(MOTOR_HAS_STALLED)
-#                 # curr_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-#                 # new_infusion = '%s : infused %.3f uL replenisher after %.2f hours at %.3f uL/s with %.3f A average current.' % (
-#                 # curr_time, infused_volume, infuse_interval, infuse_rate, I_avg)
-#                 #
-#                 # if sp.use_flag is True:
-#                 #     infusion_list.append(new_infusion)
-#                 #     infused_amt_q.put(infused_volume)
-#                 #     print("# infusions: ", infused_amt_q.qsize())
-#
-#             else:
-#                 totalI = totalI + iNew * (newTime - oldTime)
-#
-#             figure = plt.figure()
-#             p1 = figure.add_subplot(111)
-#
-#             line1, = plt.plot(tPlot, vPlot, '-')
-#             line2, = plt.plot(tPlot, iPlot, '-')
-#
-#             def updatePlot():
-#                 # Plot new voltage and current readings here in real time
-#
-#                 tPlot.append(totalTime)
-#                 vPlot.append(vNew)
-#                 iPlot.append(iNew)
-#
-#                 line1.set_data(tPlot, vPlot)
-#                 line2.set_data(tPlot, iPlot)
-#                 figure.gca().relim()
-#                 figure.gca().autoscale_view()
-#
-#                 # Copy paste code to make some labels and see if it works
-#                 try:
-#                     # total elapsed time in hh:mm:ss
-#                     hr, rem = divmod(tPlot[-1] - tPlot[0], 3600)
-#
-#                     mins, sec = divmod(rem, 60)
-#                     time_axis_title = "Time (s): Elapsed time is {:0>2} hours, {:0>2} minutes, {:d} seconds".format(int(hr),int(mins),int(sec))
-#                 except:
-#                     time_axis_title = "Time (s)"
-#
-#                 plt.xlabel(time_axis_title)
-#
-#                 return line1,line2
-#
-#             animation = FuncAnimation(figure, updatePlot, interval=1000)
-#             plt.show()
-#
-#             time.sleep(ps_checking_interval)
-#
-#
-#
-#         # Add code to delete time, voltage, and current matricies that are being plotted.
-#         # Possibly also delete current plots in order to delete any current data
-#         # Essentially if things are acting weird, just delete everything and start from scratch
-#     return
+        # RUN IF COPPER ONLY. TURN OFF FOR PERMALLOY
+        # Assumption: Infusion time is max 5 seconds (to not break power supply checking interval)
+        # Check if it is time to run the infusion (ONLY WHEN WE ARE DOING... nickel?)
+
+        if (self.nowTime - self.lastInfuseTime- self.pauseDiff)/3600.0 > 1:
+            self.doReplenishment = True
+
+        if self.platingType == "COPPER":
+            # After 1 hours, do replenishment
+                # Turn on flag to send replenishment status updates
+            if self.doReplenishment == True and (self.nowTime - self.lastInfuseTime - self.pauseDiff)/3600.0 > self.infuseInterval and self.pauseState == 0:
+                self.sendReplenishUpdates = True
+                self.lastReplenishUpdateTime = self.nowTime
+
+
+                totalT = self.nowTime - self.lastInfuseTime - self.pauseDiff
+
+            # take the total I and divide it by the total time to get the average current over the time period
+                try:
+                    I_avg = (self.total_I) / totalT
+                except:
+                    I_avg = 0
+
+                # reset the reference timer and total_I
+                self.total_I = 0
+
+                # set the infuse parameters and run the pump
+                self.sp.set_parameters(I_avg, self.infuseRate, self.infuseInterval)
+                time.sleep(0.1)
+                self.sp.infuse()
+                time.sleep(0.1)
+            else:
+                self.totalI = self.totalI + iNew * (self.nowTime - self.oldTime)
+
+            # After we have finished the number of infusions we want, we now monitor it
+            # if sendReplenish Updates flag is true
+            if (self.sendReplenishUpdates == True and (self.nowTime - self.lastReplenishUpdateTime - self.pauseDiff)/3600.0 > self.replenishUpdateInterval):
+                infused_volume, infuse_rate = self.sp.check_rate_volume()
+                curr_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                new_infusion = '%s : infused %.3f uL replenisher after %.2f hours at %.3f uL/s with %.3f A average current.' % (
+                    curr_time, infused_volume, self.infuseInterval, infuse_rate, I_avg)
+
+                if self.sp.use_flag is True: #Check what use_flag does
+                    self.sp.infusion_list.append(new_infusion)
+                    print("# infusions: ", len(self.sp.infusion_list))
+
+        ## Add the new voltage and current readings into the plot
+        # self.tPlot.append(toPlotTime)
+        # self.aPlot.append(vNew)
+        # self.bPlot.append(iNew)
+        # self.line1.set_data(self.tPlot, self.aPlot)
+        # self.line2.set_data(self.tPlot, self.bPlot)
+        # self.figure.gca().relim()
+        # self.figure.gca().autoscale_view()
+        # #plt.show()
+        # try:
+        #     # total elapsed time in hh:mm:ss
+        #     hr, rem = divmod(self.tPlot[-1] - self.tPlot[0], 3600)
+        #
+        #     mins, sec = divmod(rem, 60)
+        #     time_axis_title = "Time (s): Elapsed time is {:0>2} hours, {:0>2} minutes, {:d} seconds".format(int(hr),
+        #                                                                                                     int(mins),
+        #                                                                                                     int(sec))
+        # except:
+        #     time_axis_title = "Time (s)"
+        # plt.legend(['Voltage', 'Current'])
+        # plt.xlabel(time_axis_title)
+
+        ## Wait 5 seconds (or probably change depending on the entry to the power supply checking interval) then run again
+        print("Looped\n\n")
+        self.callback = self.after(5000, self.loopThing)
 
 def testEmail(Notify):
     # Get a screenshot the the system?
     fn = os.getcwd() + '/screenshot.png'
     os.system('scrot %s -q 75' % fn)
 
-    pathToScreenshot = "C:\\Users\\Thomas Sison\\Pictures"
+    pathToScreenshot = "C:\\Users\\Gabriele Domingo\\Pictures"
     nameScreenshot = "screenshot.png"
     img1 = dict(title='desktop screenshot', path=os.path.join(pathToScreenshot, nameScreenshot))
 
@@ -1640,8 +1514,8 @@ def menu():
 
     oxygen_reads_def = 10
 
-    ## Solenoid defaults
-    solenoid_low_bound_def = 1
+    ## Solenoid defaults (Percentages)
+    solenoid_low_bound_def = 0.5
     solenoid_high_bound_def = 2
 
     #### SMS defaults ####
@@ -1839,10 +1713,6 @@ def menu():
     outputFrame = tk.LabelFrame(root, text="Output Window", padx=labelFramePadDef[0] - 2, pady=labelFramePadDef[1] - 2)
     outputFrame.pack()
 
-    # output = scrolledtext.ScrolledText(outputFrame, width=60, height=20, font=("Tekton Pro", 9))
-    # output.config(state="disabled")
-    # output.grid(row=0, column=0, padx=0, pady=2)
-
     # oxySensorReadLabel = tk.Label(oxyFrame, text="Oxygen Sensor\nRead", height=2)
     # oxySensorReadLabel.grid(row=0, column=0, padx=gridPadDef[0])
     # oxySensorReadBox = tk.Entry(oxyFrame,width = 7)
@@ -1879,7 +1749,7 @@ def menu():
     # oxySliderManual = tk.Entry(oxyFrame, width=7)
     # oxySliderManual.grid(row=1, column=2, padx=gridPadDef[0])
 
-    oxyNumReads = tk.StringVar()
+    oxyNumReads = tk.StringVar(oxyFrame,oxygen_reads_def)
 
     oxyNumReadsText = tk.StringVar()
     oxyNumReadsText.set("Number of Reads for Calibration")
@@ -1978,8 +1848,8 @@ def menu():
     solenoidFrame = tk.LabelFrame(oxyPumpParams,text = "Solenoid")
     solenoidFrame.pack()
 
-    solenoidLowBound = tk.StringVar(solenoidFrame,0.5)
-    solenoidHighBound = tk.StringVar(solenoidFrame,2)
+    solenoidLowBound = tk.StringVar(solenoidFrame,solenoid_low_bound_def)
+    solenoidHighBound = tk.StringVar(solenoidFrame,solenoid_high_bound_def)
 
     solenoidOn = tk.IntVar(0)
     solenoidSwitch = tk.Checkbutton(solenoidFrame, text="Use Solenoid (Only if Permalloy)", variable=solenoidOn, justify="left")
@@ -1987,7 +1857,7 @@ def menu():
 
     # Solenoid Low O2 Percentage
     solenoidLowText = tk.StringVar()
-    solenoidLowText.set("Low Voltage \nWarning (V)")
+    solenoidLowText.set("Oxygen Lower Bound (%)")
     solenoidLowLabel = tk.Label(solenoidFrame, textvariable=solenoidLowText, height=2, padx=labelPadXDef)
     solenoidLowLabel.grid(row=1, column=0)
     solenoidLowBox = tk.Entry(solenoidFrame, text="Low Warning", textvariable=solenoidLowBound, width=8, justify="center")
@@ -1997,12 +1867,12 @@ def menu():
 
     # Solenoid Low O2 Percentage
     solenoidHighText = tk.StringVar()
-    solenoidHighText.set("Low Voltage \nWarning (V)")
+    solenoidHighText.set("Oxygen Higher Bound (%)")
     solenoidHighLabel = tk.Label(solenoidFrame, textvariable=solenoidHighText, height=2, padx=labelPadXDef)
     solenoidHighLabel.grid(row=1, column=1)
     solenoidHighBox= tk.Entry(solenoidFrame, text="Low Warning", textvariable=solenoidHighBound, width=8, justify="center")
     solenoidHighBoxTip = CreateToolTip(solenoidHighBox, \
-                               "Lowest voltage the power supply can be until the user must be notified that something is wrong in volts.")
+                               "The Highest Oxygen concentratin before the solenoid must be opened")
     solenoidHighBox.grid(row=2, column=1)
 
     solenoidOpenButton = tk.Button(solenoidFrame, bd=1, text="Open Solenoid", padx=buttonDef[0], pady=buttonDef[1],
@@ -2141,21 +2011,24 @@ def menu():
     initWindow(ps_ident)
 
     def testVI():
-        ps[0].run(vTargetBox.get(),iBox.get())
+        ps[0].run(float(vTargetBox.get()),float(iBox.get()))
 
         startTime = time.time()
         nowTime = startTime
 
         tPlot, aPlot, bPlot = [], [], []
         figure = plt.figure()
+        #plt.show()
         line1, = plt.plot(tPlot, aPlot, '-')
         line2, = plt.plot(tPlot,bPlot, '-')
 
         while nowTime-startTime <= 10:
             nowTime = time.time()
+            #vNew, iNew = ps[0].read_V_I()
             try: vNew,iNew = ps[0].read_V_I()
             except:
-                print("Could not read the power supply for 10 seconds.")
+                print("ERROR: Could not read the power supply for 10 seconds continuously.")
+                break
 
             toPlotTime = nowTime - startTime
 
@@ -2184,6 +2057,7 @@ def menu():
             plt.legend(['Voltage', 'Current'])
             plt.xlabel(time_axis_title)
             time.sleep(1)
+        print("Power Supply Test Ended")
 
 
     def startElectroplating():
@@ -2232,19 +2106,19 @@ def menu():
     solenoidCloseButton.config(command=lambda: monitorAppObject[0].closeSolenoid())
 
     def updateMonitorApp():
-        monitorAppObject[0].setParams(vTargetBox.get(),
-                                   iBox.get(),
-                                   vHighBox.get(),
-                                   vLowBox.get(),
-                                   checkIntervalEntry.get(),
-                                   infuseIntervalEntry.get(),
-                                   infuseRateEntry.get(),
-                                   timesToCheckEntry.get(),
-                                   oxyNumReadsBox.get(),
-                                   solenoidLowBox.get(),
-                                   solenoidHighBox.get(),
-                                   notifyTimerEntry.get(),
-                                   errorNotifyEntry.get(),
+        monitorAppObject[0].setParams(float(vTargetBox.get()),
+                                   float(iBox.get()),
+                                   float(vHighBox.get()),
+                                   float(vLowBox.get()),
+                                   float(checkIntervalEntry.get()),
+                                   float(infuseIntervalEntry.get()),
+                                   float(infuseRateEntry.get()),
+                                   float(timesToCheckEntry.get()),
+                                   float(oxyNumReadsBox.get()),
+                                   float(solenoidLowBox.get()),
+                                   float(solenoidHighBox.get()),
+                                   float(notifyTimerEntry.get()),
+                                   float(errorNotifyEntry.get()),
                                    plateOptionVar.get(),
                                 solenoidOn.get())
         print("Updated monitorApp")
@@ -2300,10 +2174,7 @@ def menu():
 
     root.mainloop()
 
-
 if __name__ == '__main__':
     notify_flag = 2
     use_text_only_for_bad_news = True
-
     menu()
-
