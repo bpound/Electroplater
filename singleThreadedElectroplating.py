@@ -13,14 +13,16 @@ import os.path
 import pickle
 import uuid
 import threading
+import serial
 
 
 #import board
-import busio
+#import busio
 #import adafruit_ads1x15.ads1115 as ADS
 #from adafruit_ads1x15.analog_in import AnalogIn
 
 
+import pyvisa_py
 import cgi,html
 import uuid
 from email.mime.multipart import MIMEMultipart
@@ -39,7 +41,10 @@ import tkinter as tk
 import matplotlib.pyplot as plt
 from tkinter import scrolledtext
 
-import RPi.GPIO as GPIO
+try:
+    import RPi.GPIO as GPIO
+except:
+    import Mock.GPIO as GPIO
 
 class O2_Sensor():
     def __init__(self, numReads):
@@ -853,14 +858,14 @@ class E3631A_PS():
     def __init__(self, channel, ps_port, ps_ident):
 
         # save identification
-        self.ident = ps_ident
+            self.ident = ps_ident
 
         # open up Resource Manager
-        rm = pyvisa.ResourceManager('@py')
+            rm = pyvisa.ResourceManager('@py')
 
         # open up the right channel
         # the USB resource needs to be figured out beforehand, there is no way to figure out which power supply is
-        try:
+        #try:
             ps = rm.open_resource(ps_port)
 
             # set address and protocol
@@ -875,7 +880,7 @@ class E3631A_PS():
 
             # save communication instance into class variable
             self.ps = ps
-        except:
+        #except:
             print('Something went wrong with power supply initialization.')
             self.ps = None
 
@@ -2028,8 +2033,9 @@ def menu():
         print(psVar.get())
         if psVar.get() == "Agilent E3631A":
             ps_ident = 1
-            ps_port = 'ASRL/dev/ttyUSB0::INSTR'
-            channel = 8
+            #ps_port = 'ASRL/dev/ttyUSB0::INSTR' #From the host
+            ps_port = 'ASRL3::INSTR'  #THOMAS'S WINDOWS LAPTOP
+            channel = 8 # Related to the device
             ps.append(E3631A_PS(channel, ps_port, ps_ident))
         elif psVar.get() == "Agilent E3634A":
             ps_ident = 2
