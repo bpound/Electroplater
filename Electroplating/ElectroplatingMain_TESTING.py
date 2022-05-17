@@ -22,32 +22,6 @@ from googleapiclient.discovery import build
 import tkinter as tk
 import matplotlib
 
-
-##########################################
-############# IMPORTANT ##################
-
-## MAKE SURE TO CHANGE PYVISA PORTS WHEN RUNNING THIS CODE ON A NEW DEVICE
-# To be able to read GPIB (Old power supplies) and syringe pump in PyVisa:
-# Install python on the device
-# pip install _____ the following:
-# 	pyvisa
-# 	pyvisa-py
-# 	pyvisa-raw
-# 	pyserial
-# 	pyusb
-#
-# To show current pyvisa instruments:
-# 	cmd (or equivalent)
-# 	import pyvisa
-# 	rm = pyvisa.ResourceManager()
-# 	rm.list_resources()
-
-##########################################
-##########################################
-
-##Other things to note
-# Don't touch stuff on the syringe pump while the code is initializing
-
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 from tkinter import scrolledtext
@@ -58,35 +32,33 @@ from tkinter import scrolledtext
 #     import Mock.GPIO as GPIO
 
 # Import our created hardware classes
-
-# use powerSuppliesHard for the hardware (actual power supplies)
-# use powerSupplies for software (simulation)
-
 import ToolTipStuff
-import powerSuppliesHard as powerSupplies
+import powerSupplies
 import OPS
 import NotifyClass
-import monitor as monitor
+import monitor
 
-screenshotPath = "/home/pi/Desktop/download.jpeg"
-pathToLogs = "/home/pi/Electroplating/logFiles"
+screenshotPath = "C:\\Users\\Gabriele Domingo\\Pictures\\potato.png"
+pathToLogs = "D:\\Files\\electro\\Logs"
 '''
 Class Order:
+Power Supplies (95)
+Legato100_SP (392)
+O2_Sensor (609)
+Solenoid_Controller (701)
 NotifyCSingle (732)
 monitorApp (1008)
 Main GUI menu (1462)
 '''
 
-
-
 def testEmail(Notify):
     # Get a screenshot the the system?
     # fn = os.getcwd() + '/screenshot.png'
-    # os.system('scrot %s -q 75' % fn)    
+    # os.system('scrot %s -q 75' % fn)
 
-    pathToScreenshot = "/home/pi/Desktop"
-    pathToLogs = "/home/pi/Electroplating/logFiles"
-    nameScreenshot = "download.jpeg"
+    pathToScreenshot = "C:\\Users\\Thomas\\Pictures"
+    pathToLogs = "D:\\Files\\electro\\Logs"
+    nameScreenshot = "map.png"
     img1 = dict(title='desktop screenshot', path=os.path.join(pathToScreenshot, nameScreenshot))
 
     try:
@@ -102,7 +74,7 @@ def testEmail(Notify):
     try:
         now = datetime.now()
         date_time = now.strftime("%m_%d_%Y %H_%M_%S")
-        testLog = open(pathToLogs+"/TEST LOG-"+date_time+".txt","w+")
+        testLog = open(pathToLogs+"\\TEST LOG-"+date_time+".txt","w+")
         testLog.write("This is a test log. Details of current electroplating such as voltage and current will go here")
         testLog.close()
     except:
@@ -141,20 +113,14 @@ def menu():
     syringe_on_time_def = 1
 
     # then initialize the syringe pump
-    #sp_port = 'ASRL4::INSTR' #Using Windows coumputer? (Works on Thomas's Laptop)
-    sp_port='ASRL/dev/ttyACM0::INSTR'
+    # sp_port = 'ASRL4::INSTR'
+    # sp_port='ASRL/dev/ttyACM0::INSTR'
     # pvisa port identifier for the syringe pump
-    #sp_port = 'ASRL/dev/ttyACM0::INSTR'
-
-    oxygen_on = False
-    # Oxygen Calibration value in something
-    oxygen_calibration_def = 1
-
-    oxygen_reads_def = 10
+    sp_port = 'ASRL/dev/ttyACM0::INSTR'
 
     ## Solenoid defaults (Percentages)
-    solenoid_low_bound_def = 17
-    solenoid_high_bound_def = 17.5
+    solenoid_low_bound_def = 0.5
+    solenoid_high_bound_def = 2
 
     #### SMS defaults ####
     # how often to check voltage and current, in seconds
@@ -163,6 +129,12 @@ def menu():
     notify_interval_def = 1.0
     # how often to notify if bad in minutes
     error_notify_interval_def = 1.0
+
+    oxygen_on = False
+    # Oxygen Calibration value in something
+    oxygen_calibration_def = 1
+
+    oxygen_reads_def = 10
 
     DEFVALUES = [volt_def[0],volt_def[1],volt_def[2],cur_def,
                  infuse_rate_def,infuse_interval_def,num_times_to_check_def,
@@ -190,9 +162,6 @@ def menu():
     ###############################################################################
     ###############################################################################
 
-    ###############################################################################
-    ###############################################################################
-
     ## tkinter spacing defaults
     labelPadXDef = 5
     labelFramePadDef = [10, 10]
@@ -210,7 +179,7 @@ def menu():
 
     #### Initialize Syringe Pump class with default parameters ####
     ## We initially keep the syringe disabled by default
-    SyringeObject = OPS.Legato100_SP(sp_port, s_manufacturer, s_volume, factor_def, True)
+    SyringeObject = OPS.Legato100_SP(sp_port, s_manufacturer, s_volume, factor_def, False)
 
     SolenoidObject = OPS.Solenoid_Controller()
 
@@ -219,74 +188,14 @@ def menu():
     root = tk.Tk()
     root.title("Main Settings")
     root.geometry('+%d+%d' % (0, 0))
-    ############################
 
-    #### Make main buttons ####
-    IVButtonFrame = tk.LabelFrame(root, text="Main Controls", padx=labelFramePadDef[0], pady=labelFramePadDef[1])
-    IVButtonFrame.pack()
+    voltage_frame = tk.LabelFrame(root, text="Voltage", padx=labelFramePadDef[0], pady=labelFramePadDef[1])
+    voltage_frame.pack()
 
-    testButtonFrame = tk.LabelFrame(root,text="Testing Controls",padx=labelFramePadDef[0], pady=labelFramePadDef[1])
-    testButtonFrame.pack()
-
-    testButton = tk.Button(testButtonFrame, bd=1, text="Test Voltage/Current \nSettings", padx=buttonDef[0], pady=buttonDef[1],
-                           width=buttonDef[2], height=buttonDef[3])
-    testButtonTip = ToolTipStuff.CreateToolTip(testButton, \
-                                  "Runs a 5 second test and reads the power supply current and voltage. Used to ensure nothing's wrong with the power supply.")
-    testButton.config(command=lambda: testVI())
-    testButton.grid(row=0, column=0, padx=gridPadDef[0], pady=gridPadDef[1])
-
-    runButton = tk.Button(IVButtonFrame, bd=1, text="Run Electroplating", padx=buttonDef[0], pady=buttonDef[1],
-                          width=buttonDef[2], height=buttonDef[3])
-    runButton.grid(row=0, column=0, padx=gridPadDef[0], pady=gridPadDef[1],columnspan=2)
-
-    stopButton = tk.Button(IVButtonFrame, bd=1, text="Stop", padx=buttonDef[0], pady=buttonDef[1],
-                           width=buttonDef[2], height=buttonDef[3])
-    stopButton['state'] = tk.DISABLED
-
-    stopButton.grid(row=1, column=1, padx=gridPadDef[0], pady=gridPadDef[1])
-
-    pauseButton = tk.Button(IVButtonFrame, bd=1, text="Pause", padx=buttonDef[0], pady=buttonDef[1],
-                            width=buttonDef[2], height=buttonDef[3])
-    pauseButton['state'] = tk.DISABLED
-
-    pauseButton.grid(row=1, column=0, padx=gridPadDef[0], pady=gridPadDef[1])
-
-    # infuseButton = tk.Button(IVButtonFrame,bd=1,text="Run Infusion",padx=buttonDef[0], pady=buttonDef[1],
-    #                       width=buttonDef[2], height=buttonDef[3])
-    #
-    # infuseButton.grid(row=2,column=0,columnspan=2)
-
-    ###########################
-
-    #### Make main output Console ####
-    outputFrame = tk.LabelFrame(root, text="Output Window", padx=labelFramePadDef[0] - 2, pady=labelFramePadDef[1] - 2)
-    outputFrame.pack()
-
-    # oxySensorReadLabel = tk.Label(oxyFrame, text="Oxygen Sensor\nRead", height=2)
-    # oxySensorReadLabel.grid(row=0, column=0, padx=gridPadDef[0])
-    # oxySensorReadBox = tk.Entry(oxyFrame,width = 7)
-    # oxySensorReadBox.grid(row=0,column=1,padx=gridPadDef[0])
-    # oxySensorReadBox['state'] = tk.DISABLED
-
-    ##################################
-
-    #### Oxygen and Syringe Pump Window ####
-    paramsWindow = tk.Toplevel()
-    paramsWindow.title("Electroplating Settings")
-    paramsWindow.geometry('+%d+%d' % (500, 0))
-
-    voltage_frame = tk.LabelFrame(paramsWindow, text="Voltage", padx=labelFramePadDef[0], pady=labelFramePadDef[1])
-    voltage_frame.grid(row=0,column=0,ipady=20)
-
-
-    plateOptionText = tk.StringVar()
-    plateOptionText.set("Plating Type")
-    plateOptionTextLabel = tk.Label(voltage_frame, textvariable=plateOptionText, height=2, padx=labelPadXDef)
-    plateOptionTextLabel.grid(row=0, column=0,columnspan=3)
     plateOptionVar = tk.StringVar(voltage_frame)
 
     plateOption = tk.OptionMenu(voltage_frame, plateOptionVar, "Copper", "Nickel")
-    plateOption.grid(row=1, column=0, columnspan=3)
+    plateOption.grid(row=0, column=0, columnspan=3)
 
     # create string variables to store Voltage text box contents
     vTarget = tk.StringVar(voltage_frame, str(volt_def[0]))
@@ -297,35 +206,35 @@ def menu():
     vTargetText = tk.StringVar()
     vTargetText.set("Target \nVoltage (V)")
     vTargetBoxLabel = tk.Label(voltage_frame, textvariable=vTargetText, height=2, padx=labelPadXDef)
-    vTargetBoxLabel.grid(row=2, column=0)
+    vTargetBoxLabel.grid(row=1, column=0)
     vTargetBox = tk.Entry(voltage_frame, text="Target", textvariable=vTarget, width=8, justify="center")
     vTargetBoxTip = ToolTipStuff.CreateToolTip(vTargetBox, \
                             "Sets voltage for the power supply to aim to be around when running electroplating in volts")
-    vTargetBox.grid(row=3, column=0)
+    vTargetBox.grid(row=2, column=0)
 
     # Low voltage warning
     vLowText = tk.StringVar()
     vLowText.set("Low Voltage \nWarning (V)")
     vLowBoxLabel = tk.Label(voltage_frame, textvariable=vLowText, height=2, padx=labelPadXDef)
-    vLowBoxLabel.grid(row=2, column=1)
+    vLowBoxLabel.grid(row=1, column=1)
     vLowBox = tk.Entry(voltage_frame, text="Low Warning", textvariable=vLowWarn, width=8, justify="center")
     vLowBoxTip = ToolTipStuff.CreateToolTip(vLowBox, \
                                "Lowest voltage the power supply can be until the user must be notified that something is wrong in volts.")
-    vLowBox.grid(row=3, column=1)
+    vLowBox.grid(row=2, column=1)
 
     # high voltage warning
     vHighText = tk.StringVar()
     vHighText.set("High Voltage \nWarning(V)")
     vHighBoxLabel = tk.Label(voltage_frame, textvariable=vHighText, height=2, padx=labelPadXDef)
-    vHighBoxLabel.grid(row=2, column=2)
+    vHighBoxLabel.grid(row=1, column=2)
     vHighBox = tk.Entry(voltage_frame, text="High Warning", textvariable=vHighWarn, width=8, justify="center")
     vHighBoxTip = ToolTipStuff.CreateToolTip(vHighBox, \
                                 "Highest voltage the power supply can output until the user must be notified that something is wrong in volts.")
-    vHighBox.grid(row=3, column=2)
+    vHighBox.grid(row=2, column=2)
 
     # Create String variable for target current
-    current_frame = tk.LabelFrame(paramsWindow, text="Current", padx=labelFramePadDef[0], pady=labelFramePadDef[1])
-    current_frame.grid(row=0,column=1,ipady=20)
+    current_frame = tk.LabelFrame(root, text="Current", padx=labelFramePadDef[0], pady=labelFramePadDef[1])
+    current_frame.pack()
 
     iTargetText = tk.StringVar(current_frame, str(cur_def))
     iText = tk.StringVar(value="Target \nCurrent (A)")
@@ -402,20 +311,76 @@ def menu():
     iArea2.bind('<FocusOut>', calcDensity2, add="+")
     iArea2.bind('<Return>', calcDensity2, add="+")
 
+    ############################
+
+    #### Make main buttons ####
+
+    ## SEPERATE TO OWN WINDOW
+
+    IVButtonFrame = tk.LabelFrame(root, text="Main Controls", padx=labelFramePadDef[0], pady=labelFramePadDef[1])
+    IVButtonFrame.pack()
+
+    testButton = tk.Button(IVButtonFrame, bd=1, text="Test IV \nSettings", padx=buttonDef[0], pady=buttonDef[1],
+                           width=buttonDef[2], height=buttonDef[3])
+    testButtonTip = ToolTipStuff.CreateToolTip(testButton, \
+                                  "Runs a 5 second test and reads the power supply current and voltage. Used to ensure nothing's wrong with the power supply.")
+    testButton.config(command=lambda: testVI())
+    testButton.grid(row=0, column=0, padx=gridPadDef[0], pady=gridPadDef[1])
+
+    runButton = tk.Button(IVButtonFrame, bd=1, text="Run Electroplating", padx=buttonDef[0], pady=buttonDef[1],
+                          width=buttonDef[2], height=buttonDef[3])
+    runButton.grid(row=1, column=0, padx=gridPadDef[0], pady=gridPadDef[1])
+
+    stopButton = tk.Button(IVButtonFrame, bd=1, text="Stop", padx=buttonDef[0], pady=buttonDef[1],
+                           width=buttonDef[2], height=buttonDef[3])
+    stopButton['state'] = tk.DISABLED
+
+    stopButton.grid(row=1, column=1, padx=gridPadDef[0], pady=gridPadDef[1])
+
+    pauseButton = tk.Button(IVButtonFrame, bd=1, text="Pause", padx=buttonDef[0], pady=buttonDef[1],
+                            width=buttonDef[2], height=buttonDef[3])
+    pauseButton['state'] = tk.DISABLED
+
+    pauseButton.grid(row=0, column=1, padx=gridPadDef[0], pady=gridPadDef[1])
+
+    # infuseButton = tk.Button(IVButtonFrame,bd=1,text="Run Infusion",padx=buttonDef[0], pady=buttonDef[1],
+    #                       width=buttonDef[2], height=buttonDef[3])
+    #
+    # infuseButton.grid(row=2,column=0,columnspan=2)
+
+    ###########################
+
+    #### Make main output Console ####
+    outputFrame = tk.LabelFrame(root, text="Output Window", padx=labelFramePadDef[0] - 2, pady=labelFramePadDef[1] - 2)
+    outputFrame.pack()
+
+    # oxySensorReadLabel = tk.Label(oxyFrame, text="Oxygen Sensor\nRead", height=2)
+    # oxySensorReadLabel.grid(row=0, column=0, padx=gridPadDef[0])
+    # oxySensorReadBox = tk.Entry(oxyFrame,width = 7)
+    # oxySensorReadBox.grid(row=0,column=1,padx=gridPadDef[0])
+    # oxySensorReadBox['state'] = tk.DISABLED
+
+    ##################################
+
+    #### Oxygen and Syringe Pump Window ####
+    oxyPumpParams = tk.Toplevel()
+    oxyPumpParams.title("Oxygen and Syringe Pump Settings")
+    oxyPumpParams.geometry('+%d+%d' % (500, 0))
+
     #### Oxygen Stuff ####
-    oxyFrame = tk.LabelFrame(paramsWindow, text="Oxygen Sensor", padx=labelFramePadDef[0], pady=labelFramePadDef[1])
-    oxyFrame.grid(row=0,column=2)
+    oxyFrame = tk.LabelFrame(oxyPumpParams, text="Oxygen Sensor", padx=labelFramePadDef[0], pady=labelFramePadDef[1])
+    oxyFrame.pack()
 
     oxyOn = tk.IntVar(0)
     oxySwitch = tk.Checkbutton(oxyFrame, text="Enable?", variable=oxyOn)
-    oxySwitch.grid(row=0, column=0,ipady=20,sticky="N")
+    oxySwitch.grid(row=0, column=0)
 
-    # oxySensorReadLabel = tk.Label(oxyFrame, text="Oxygen Sensor\nRead", height=2)
-    # oxySensorReadLabel.grid(row=0, column=2, padx=gridPadDef[0])
-    #
-    # oxySensorReadBox = tk.Entry(oxyFrame, width=7)
-    # oxySensorReadBox.grid(row=1, column=2, padx=gridPadDef[0])
-    # oxySensorReadBox['state'] = tk.DISABLED
+    oxySensorReadLabel = tk.Label(oxyFrame, text="Oxygen Sensor\nRead", height=2)
+    oxySensorReadLabel.grid(row=0, column=2, padx=gridPadDef[0])
+
+    oxySensorReadBox = tk.Entry(oxyFrame, width=7)
+    oxySensorReadBox.grid(row=1, column=2, padx=gridPadDef[0])
+    oxySensorReadBox['state'] = tk.DISABLED
 
     # oxySliderLabel = tk.Label(oxyFrame, text="Some Oxygen\nParameter", height=2)
     # oxySliderLabel.grid(row=1, column=0)
@@ -437,8 +402,8 @@ def menu():
     oxyNumReadsBox.grid(row=3, column=0)
 
     #### Syringe Pump Stuff ####
-    pumpFrame = tk.LabelFrame(paramsWindow, text="Syringe Pump", padx=labelFramePadDef[0], pady=labelFramePadDef[1])
-    pumpFrame.grid(row=0,column=3)
+    pumpFrame = tk.LabelFrame(oxyPumpParams, text="Syringe Pump", padx=labelFramePadDef[0], pady=labelFramePadDef[1])
+    pumpFrame.pack()
 
     pumpOn = tk.IntVar(0)
     pumpSwitch = tk.Checkbutton(pumpFrame, text="Enable?", variable=pumpOn, justify="left")
@@ -449,10 +414,10 @@ def menu():
                                             variable=pumpEquillibrium, justify="left")
     pumpEquillibriumSwitch.grid(row=1, column=0, sticky="W")
 
-    pumpTestButton = tk.Button(testButtonFrame, bd=2, text="Test Pump", padx=buttonDef[0], pady=buttonDef[1],
-                           width=buttonDef[2], height=buttonDef[3])
+    pumpTestButton = tk.Button(pumpFrame, bd=2, text="Test Pump", pady=5,
+                               width=buttonDef[2] - 5, height=buttonDef[3])
     pumpTestButton.config(command=lambda: testSyringePump())
-    pumpTestButton.grid(row=0, column=1, padx=gridPadDef[0], pady=gridPadDef[1])
+    pumpTestButton.grid(row=0, column=1, rowspan=2)
 
     ## Make a bunch of Entry parameters
 
@@ -522,8 +487,8 @@ def menu():
     vLowWarn = tk.StringVar(voltage_frame, str(volt_def[1]))
     vHighWarn = tk.StringVar(voltage_frame, str(volt_def[2]))
 
-    solenoidFrame = tk.LabelFrame(paramsWindow, text="Solenoid")
-    solenoidFrame.grid(row=0,column=4)
+    solenoidFrame = tk.LabelFrame(oxyPumpParams, text="Solenoid")
+    solenoidFrame.pack()
 
     solenoidLowBound = tk.StringVar(solenoidFrame, solenoid_low_bound_def)
     solenoidHighBound = tk.StringVar(solenoidFrame, solenoid_high_bound_def)
@@ -563,14 +528,13 @@ def menu():
                                     width=buttonDef[2], height=buttonDef[3])
     solenoidCloseButton.grid(row=3, column=1, padx=gridPadDef[0], pady=gridPadDef[1])
 
-    sole02TestButton = tk.Button(testButtonFrame, bd=1, text="Test 02/Solenoid", padx=buttonDef[0], pady=buttonDef[1],
+    sole02TestButton = tk.Button(solenoidFrame, bd=1, text="Test 02/Solenoid", padx=buttonDef[0], pady=buttonDef[1],
                                     width=buttonDef[2], height=buttonDef[3])
-    sole02TestButton.grid(row=1, column=0, padx=gridPadDef[0], pady=gridPadDef[1])
-
+    sole02TestButton.grid(row=4, column=1, padx=gridPadDef[0], pady=gridPadDef[1])
 
     #### SMS Options ####
     SMSParamsWindows = tk.Toplevel()
-    SMSParamsWindows.title("Timing Settings")
+    SMSParamsWindows.title("Timings")
     SMSParamsWindows.geometry('+%d+%d' % (500, 450))
 
     SMSFrame = tk.LabelFrame(SMSParamsWindows, text="Options", padx=labelFramePadDef[0], pady=labelFramePadDef[1])
@@ -587,24 +551,24 @@ def menu():
                                           "Sets amount of time between each check of voltage and current, in seconds")
     checkIntervalEntry.grid(row=0, column=1, padx=gridPadDef[0], pady=gridPadDef[1])
 
-    notifyTimerLabel = tk.Label(SMSFrame, text="Failure Count Interval (min.)")
+    notifyTimerLabel = tk.Label(SMSFrame, text="Ok Notification Interval (min.)")
     notifyTimerLabel.grid(row=1, column=0, padx=gridPadDef[0])
     notifyTimerEntry = tk.Entry(SMSFrame, width=8, textvariable=notifyTimer, justify="center")
     notifyTimerEntryTip = ToolTipStuff.CreateToolTip(notifyTimerEntry, \
-                                        "Sets the interval of time that we count how many errors occur during Electroplating (Smaller numbers = More emails about errors)")
+                                        "Sets how often to send a notification if the system is running ok in minutes")
     notifyTimerEntry.grid(row=1, column=1, padx=gridPadDef[0], pady=gridPadDef[1])
 
     errorNotifyLabel = tk.Label(SMSFrame, text="Error Notification Interval (min.)")
     errorNotifyLabel.grid(row=2, column=0, padx=gridPadDef[0])
     errorNotifyEntry = tk.Entry(SMSFrame, width=8, textvariable=errorNotify, justify="center")
     errorNotifyEntryTip = ToolTipStuff.CreateToolTip(errorNotifyEntry, \
-                                        "Sets how often to send an email when the system meets an error to prevent spam.")
+                                        "Sets how often to notify if the system has reached an error in minutes")
     errorNotifyEntry.grid(row=2, column=1, padx=gridPadDef[0], pady=gridPadDef[1])
 
-    emailTestButton = tk.Button(testButtonFrame, bd=2, text="Test Email Protocol", padx=buttonDef[0], pady=buttonDef[1],
-                                    width=buttonDef[2], height=buttonDef[3])
+    emailTestButton = tk.Button(SMSFrame, bd=2, text="Test Email Protocol", pady=5,
+                                width=buttonDef[2] + 5, height=buttonDef[3])
     emailTestButton.config(command=lambda: testEmail(NotifyObject))
-    emailTestButton.grid(row=1, column=1, padx=gridPadDef[0], pady=gridPadDef[1])
+    emailTestButton.grid(row=3, column=0, columnspan=2)
     emailTestButtonTip = ToolTipStuff.CreateToolTip(emailTestButton, \
                                        "Sends a test email to see if the email protocol actually works")
 
@@ -620,7 +584,7 @@ def menu():
     iBox.bind('<FocusOut>', BadNumber)
 
     root.withdraw()
-    paramsWindow.withdraw()
+    oxyPumpParams.withdraw()
     SMSParamsWindows.withdraw()
 
     psVar = tk.StringVar()
@@ -655,18 +619,15 @@ def menu():
             return
 
         root.deiconify()
-        paramsWindow.deiconify()
+        oxyPumpParams.deiconify()
         SMSParamsWindows.deiconify()
 
         breakThis.withdraw()
 
-        # Power supply ports are very likely to change between computers. Make sure to check manually what port
-        # The power supply is run on before doing anything
         print(psVar.get())
         if psVar.get() == "Agilent E3631A":
             ps_ident = 1
-            ps_port = 'ASRL/dev/ttyUSB0::INSTR' #Default
-            # ps_port = 'ASRL3::INSTR'
+            ps_port = 'ASRL/dev/ttyUSB0::INSTR'
             channel = 8
             ps.append(powerSupplies.E3631A_PS(channel, ps_port, ps_ident))
         elif psVar.get() == "Agilent E3634A":
@@ -703,6 +664,8 @@ def menu():
             exit(2)
 
     initWindow(ps_ident)
+
+    #...should testing of hardware be put in the monitorApp instead?
 
     def testVI():
         ps[0].run(float(vTargetBox.get()), float(iBox.get()))
@@ -774,20 +737,22 @@ def menu():
         ax = figure.add_subplot(111)
 
         line1, = ax.plot(tPlot, aPlot, '-')
-        while nowTime - startTime <= 300:
+        while nowTime - startTime <= 10:
             nowTime = time.time()
-            vNew,oNew = OxySensorObject.read_O2_conc()
+            try:
+                if (loopCount % 2) == 0:
+                    vNew, oNew = OxySensorObject.read_O2_conc("Closed")
+                if (loopCount % 2) == 1:
+                    vNew,oNew = OxySensorObject.read_O2_conc("Open")
 
-            if oNew > solenoid_high_bound_def:
-                print("O2 Higher than " + str(solenoid_high_bound_def) + ", Solenoid Closed")
-                SolenoidObject.open_solenoid()
-            if oNew < solenoid_low_bound_def:
-                print("O2 Lower than " + str(solenoid_low_bound_def) + ", Solenoid Opened")
-                SolenoidObject.close_solenoid()
+                if oNew > solenoid_high_bound_def:
+                    print("O2 Higher than " + str(solenoid_high_bound_def) + ", Solenoid Closed")
+                if oNew < solenoid_low_bound_def:
+                    print("O2 Lower than " + str(solenoid_low_bound_def) + ", Solenoid Opened")
 
-#             except:
-#                 print("ERROR: Could not read the 02 Sensor for 10 seconds continuously.")
-#                 break
+            except:
+                print("ERROR: Could not read the 02 Sensor for 10 seconds continuously.")
+                break
 
             toPlotTime = nowTime - startTime
 
@@ -859,6 +824,9 @@ def menu():
         return
 
     def startElectroplating():
+        #Update the monitiorApp one last time in case of any stray changes
+        updateMonitorApp()
+
         stopButton['state'] = tk.NORMAL
         pauseButton['state'] = tk.NORMAL
 
@@ -882,6 +850,8 @@ def menu():
         stopButton['state'] = tk.DISABLED
         pauseButton['state'] = tk.DISABLED
 
+        runButton['state'] = tk.NORMAL
+        
         runButton['state'] = tk.NORMAL
         vTargetBox['state'] = tk.NORMAL
         vHighBox['state'] = tk.NORMAL
@@ -1000,7 +970,6 @@ def menu():
     # solenoidHighBox.bind('<Key>', lambda event: updateMonitorApp(), add="+")
     # notifyTimerEntry.bind('<Key>', lambda event: updateMonitorApp(), add="+")
     # errorNotifyEntry.bind('<Key>', lambda event: updateMonitorApp(), add="+")
-
 
     # Boxes containing number inputs need to be first checked that their inputs are floats before
     # Updating the monitorApp

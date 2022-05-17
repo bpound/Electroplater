@@ -1,20 +1,6 @@
 ''' HARDWARE CLASSES'''
-import pyvisa
-import pyvisa_py
-import time
-
-# try:
-#     import RPi.GPIO as GPIO
-# except:
-#     import Mock.GPIO as GPIO
-# import busio
-# import board
-# import adafruit_ads1x15.ads1115 as ADS
-# from adafruit_ads1x15.analog_in import AnalogIn
-
 class Legato100_SP():
     def __init__(self, sp_port, s_manufacturer, s_volume, factor, use_syringe_pump):
-        print("Syringe Pump Initializing\n")
 
         self.use_flag = use_syringe_pump
 
@@ -52,8 +38,6 @@ class Legato100_SP():
                 print('Syringe type: %s' % self.sp.read().strip())
 
         # Simulation objects
-        print("\n")
-
         self.stateDelay = 3 #Number of times before a state can be changed
         self.curDelay = 0 #Current times has state has occured until we can change
 
@@ -239,11 +223,12 @@ class Legato100_SP():
 
 class O2_Sensor():
     def __init__(self, numReads):
-        ### If O2 sensor does not initiailize correctly
-        # exit and try running the code again. The O2 sensor works a bit weird sometimes
-        # Initializing again seems to clear things up
-        # Else, try going through the try clause manually
-        
+
+        self.lastVOxy = 5
+        self.lastO2 = 0.02
+
+        self.curDelay = 0
+        self.stateDelay = 5
 
         ### setup the adc to read the O2 sensor
         # create the I2C bus
@@ -253,14 +238,12 @@ class O2_Sensor():
             ads = ADS.ADS1115(i2c)
             # set the gain (2/3,1,2,4,8,16); probably doesn't do anything since we use the voltage reading directly
             ads.gain = 1
-            print("02 Sensor I2C Installed")
         except:
-            print("Something went wrong with 02 Sensor Initialization")
+            print("Something went wrong with 02 Sensor Intialization")
 
         # create differential input chetween channel 0 and 1. No need to set the gain, we will use the voltage directly.
         try:
             self.chan = AnalogIn(ads, ADS.P0, ADS.P1)
-            print("02 Sensor AnalogIn Completed")
         except:
             print("Something went wrong with O2 Sensor Initialization")
 
@@ -283,12 +266,10 @@ class O2_Sensor():
 
     def _calculate_conversion_factor(self):
         # conversion factor to convert volts to O2 concentration
-        print("\n")
         print('old conversion factor: %.6f [percent/V]' % (self.conversion_factor))
         self.conversion_factor = self.o2_percent / (
                 self.o2_a - self.o2_b)  # divide by 1000 to convert o2_a/b from [mV] to [V]
         print('new conversion factor: %.6f [percent/V]' % (self.conversion_factor))
-        print("\n")
 
     def calibrate(self):
 
@@ -303,20 +284,40 @@ class O2_Sensor():
         print('new value of o2_a: %.6f [V]' % (self.o2_a))
         self._calculate_conversion_factor()  # calculate new conversion factor
 
-    def read_O2_conc(self):
-        newV_settled = 0
-        newO2perc_settled = 0
-        for ii in range(self.numReads):
-             newV = self.chan.voltage
-             new_O2_perc_value = newV * self.conversion_factor
-        
-             newV_settled += newV
-             newO2perc_settled += new_O2_perc_value
-             time.sleep(0.01)
-        
-         # gets average
-        newV_settled = newV_settled / self.numReads
-        newO2perc_settled = newO2perc_settled / self.numReads
+    def read_O2_conc(self, solenoidState):
+        # Spit out fake values of oxygen depending on if the solenoid is closed or not
+        # Doesn't happen in real life, but whatever
+
+        newV_settled = self.lastVOxy
+
+        # Update the 02 simulation as a triangle wave
+
+        if solenoidState == "Open":
+            self.curDelay += 1
+            garbage = -0.8
+        if solenoidState == "Closed":
+            self.curDelay += 1
+            garbage = 0.8
+
+        newO2perc_settled = self.lastO2 + garbage
+        print("Old O2: " + str(self.lastO2))
+        print("New O2: " + str(newO2perc_settled))
+        print("\n\n")
+        self.lastO2 = newO2perc_settled
+
+        # newV_settled = 0
+        # newO2perc_settled = 0
+        # for ii in range(self.numReads):
+        #     newV = self.chan.voltage
+        #     new_O2_perc_value = newV * self.conversion_factor
+        #
+        #     newV_settled += newV
+        #     newO2perc_settled += new_O2_perc_value
+        #     time.sleep(0.01)
+        #
+        # # gets average
+        # newV_settled = newV_settled / self.numReads
+        # newO2perc_settled = newO2perc_settled / self.numReads
 
         return newV_settled, newO2perc_settled
 
@@ -325,25 +326,16 @@ class Solenoid_Controller():
         ## initial setup
         self.control_pin = 37
         self.status = 0  # 0 is closed, 1 is open
-        
-        # So this setup is technically bad practice with GPIO (do not want to call a cleanup)
-        # However, this will reliably ensure that the Solenoid Controller Initializes correctly
-        # Each time. Why does it work. Nobody knows; probably due to defaulting to a different mode
-        # or something. Whatever it is....
-        # DO NOT TOUCH THE INSIDE OF THE TRY AND EXCEPT CLAUSE
-        try:
-            GPIO.setup(self.control_pin,GPIO.OUT)
-            GPIO.cleanup()
-            GPIO.setmode(GPIO.BOARD)
-            GPIO.setup(self.control_pin,GPIO.OUT)
-            print("Solenoid Initialized Correctly")
-        except:
-            print("Solenoid Initialization Failed++++++++++++++++")
 
+        # set the board pin number address scheme. We want to use pin 37 for signal. The ground is plugged into pin 39 (doesn't need to be controlled, obviously)
+        #GPIO.setmode(GPIO.BOARD)
+
+        # set up pin 37 as output
+        #GPIO.setup(self.control_pin, GPIO.OUT)
 
     def open_solenoid(self):
         # Let out oxygen
-        GPIO.output(self.control_pin, GPIO.HIGH)
+        #GPIO.output(self.control_pin, GPIO.HIGH)
         self.status = 1
 
         # Tell the monitor loop to send
@@ -351,12 +343,9 @@ class Solenoid_Controller():
 
     def close_solenoid(self):
         # Let in oxygen
-        GPIO.output(self.control_pin, GPIO.LOW)
+        #GPIO.output(self.control_pin, GPIO.LOW)
         self.status = 0
 
     def cleanup(self):
         if self.status == 1:  # if its open, shut it before continuing
             self.close_solenoid()
-        GPIO.cleanup()
-        #  CALL CLEANUP sometime in the monitor
-        

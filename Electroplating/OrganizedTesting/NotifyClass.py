@@ -87,10 +87,10 @@ class NotifyCSingle():
         # Hardcoded things
         self.fromEmail = "stl.electroplating@gmail.com"
         self.toEmail = ["spokosison@gmail.com"]
-        self.pathToScreenshot = "/home/pi/Desktop"
-        self.nameScreenshot = 'download.jpeg' #Note that this needs to be mapped to the desktop screenshot
-        self.pathToCredentials = "/home/pi/Desktop/credentials.json"
-        self.dirToPickle = "/home/pi/Desktop"
+        self.pathToScreenshot = "C:\\Users\\Thomas\\Pictures"
+        self.nameScreenshot = 'platingCheck.png'
+        self.pathToCredentials = "C:\\Users\\Thomas\\Desktop\\credentials.json"
+        self.dirToPickle = "C:\\Users\\Thomas\\Desktop"
 
     # Create googleEmailAPI functions for message protocol. Won't need to be used outside of this class? (Hopefully)
     def get_service(self, pathToCredentials, dirToPickle):
@@ -114,24 +114,19 @@ class NotifyCSingle():
         # time.
         picklePath = os.path.join(dirToPickle, 'token.pickle')
         if os.path.exists(picklePath):
-            print("Found Existing Pickle Path")
             with open(picklePath, 'rb') as token:
                 creds = pickle.load(token)
 
         # If there are no (valid) credentials available, let the user log in.
         if not creds or not creds.valid:
-            print("No Credentials found, letting user log in")
             if creds and creds.expired and creds.refresh_token:
-                print("Creds found but expired")
                 creds.refresh(Request())
             else:
-                print("Starting Local Server thing")
                 flow = InstalledAppFlow.from_client_secrets_file(
                     pathToCredentials, SCOPES)
                 creds = flow.run_local_server(port=0)
             # Save the credentials for the next run
             with open(picklePath, 'wb') as token:
-                print("Saving Credentials")
                 pickle.dump(creds, token)
 
         service = build('gmail', 'v1', credentials=creds)
@@ -235,6 +230,8 @@ class NotifyCSingle():
 
         # unpack list
 
+
+
         notify_time_ref = notify_list[0]
         notify_time = notify_list[1]
 
@@ -284,17 +281,12 @@ class NotifyCSingle():
         #     except:
         #         print("Could not send text message notification, going to hope that the error was not fatal")
 
-        #Get a screenshot the the system?
-        #fn = os.getcwd() + '/screenshots/screenshot.png'
-        if os.path.exists("/home/pi/Electroplating/screenshots/screenshot.png"):
-            os.remove("/home/pi/Electroplating/screenshots/screenshot.png")
-        
-        os.system('scrot -q 75 /home/pi/Electroplating/screenshots/screenshot.png')
-        
-       #pyautogui.screenshot().save(r'/home/pi/Electroplating/screenshots/screenshot.png')
-        
-        pathToScreenshot = "/home/pi/Electroplating/screenshots"
-        nameScreenshot = "screenshot.png"
+        # Get a screenshot the the system?
+        # fn = os.getcwd() + '/screenshot.png'
+        # os.system('scrot %s -q 75' % fn)
+
+        pathToScreenshot = "C:\\Users\\Thomas\\Pictures"
+        nameScreenshot = "map.png"
         img1 = dict(title='desktop screenshot', path=os.path.join(pathToScreenshot, nameScreenshot))
 
         try:
