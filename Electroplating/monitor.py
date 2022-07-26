@@ -71,15 +71,18 @@ class monitorApp(tk.Frame):
         self.solenoidLowBound = solenoidLowBound  # Percentages
         self.solenoidHighBound = solenoidHighBound
 
+        self.solenoidState = "Closed" #For simulations
+
         ## Parameters for the notifyClass
         self.okNotifyIntervalMin = okNotifyIntervalMin  # Minutes between standard notifications
         self.errorNotifyInterval = error_notify_interval_def  # Minimum minutes between the monitorApp sending an error notificiation
         self.error_notify_count = 0  # Total number of errors occured during a run
-        self.error_notify_cnt_MAX = 8  # Max TOTAL number of errors, not sure if I'm even gonna use this
         self.lastStandardNotifyTime = 0  # Last STANDARD notification time
         self.lastErrorNotifyTime = 0
-        self.failLast20Min = 0
-        self.failLast20Threshold = 20
+        self.failLastXMin = 0
+        self.failThreshold = 20
+
+        self.timeBetweenEmails = 1
 
         ## Parameters for internal timing
         self.startTime = time.time()
@@ -120,6 +123,7 @@ class monitorApp(tk.Frame):
         print("SOLENOID HIGH BOUND (%): " + str(self.solenoidHighBound))
         print("STANDARD NOTIFY INTERVAL (minutes): " + str(self.okNotifyIntervalMin))
         print("ERROR NOTIFY INTERVAL (minutes): " + str(self.errorNotifyInterval))
+        print("ERROR THRESHOLD: " + str(self.failThreshold))
         print("")
         print("Plating type: " + self.platingType)
         print("Use Solenoid and Oxygen Sensor? " + str(self.useSolenoidandOxy))
@@ -138,6 +142,7 @@ class monitorApp(tk.Frame):
                   solenoidHighBound,
                   okNotifyIntervalMin,
                   errorNotifyInterval,
+                  failThreshold,
                   plateOption,
                   solenoidOn):
         # Power Supply
@@ -165,6 +170,7 @@ class monitorApp(tk.Frame):
         # Notify Class
         self.okNotifyIntervalMin = okNotifyIntervalMin
         self.errorNotifyInterval = errorNotifyInterval
+        self.failThreshold = failThreshold
 
         self.platingType = plateOption
 
@@ -200,16 +206,26 @@ class monitorApp(tk.Frame):
         self.lastStandardNotifyTime = self.startTime
         self.lastErrorNotifyTime = self.startTime
         self.nowTime = self.startTime
+        self.pauseDiff = 0
         self.totalI = 0
+        self.failLastXMin = 0
 
         self.vOld = self.vTar
         self.iOld = self.iTar
 
         self.solenoidState = "Open"
         self.solenoidClosedFlag = False
-        
-        self.x_data, self.y_data = [], []
-        self.tPlot, self.aPlot, self.bPlot = [], [], []
+
+        plt.ion()
+        self.tPlot, self.aPlot, self.bPlot, self.oxyPlot = [], [], [],[]
+
+        self.fig, [self.v_axes, self.i_axes] = plt.subplots(2, 1)
+        print("Voltage/Current Graph created")
+        self.fig.suptitle('Real-time plots of characteristics')
+
+        if self.platingType == "PERMALLOY" and self.useSolenoidandOxy == True:
+            print("Solenoid/Oxygen graph created")
+            self.figOxy = plt.figure()
 
         now = datetime.now().strftime("%m_%d_%Y %H_%M_%S")
         self.runLog = open(pathToLogs+"\\"+self.psName+" "+now+".txt","w+")
@@ -226,14 +242,17 @@ class monitorApp(tk.Frame):
 
     def pauseMonitor(self):
         if self.pauseState == 0:
+            print("Monitor Paused")
             self.pauseState = 1
             self.startPauseTime = time.time()
 
-            self.ps.run(0, 0)
+            self.ps.stop()
 
-            self.callback
+            #self.callback
+            self.after_cancel(self.callback)
             return
         if self.pauseState == 1:
+            print("Monitor Unpaused")
             self.pauseState = 0
             self.fromPause = 1
 
@@ -243,7 +262,9 @@ class monitorApp(tk.Frame):
 
             self.ps.run(self.vTar, self.iTar)
 
-            self.callback
+            #self.callback
+            print("Length of Pause: " + str(self.stopPauseTime - self.startPauseTime))
+            self.loopThing()
             return
 
     def stopMonitor(self):
@@ -345,14 +366,15 @@ class monitorApp(tk.Frame):
         # 5 seconds later after it has happened (also units on Time since last error message is wrong)
 
         def calcTimeErrorDelta():
-            return self.nowTime - self.lastErrorNotifyTime - self.pauseDiff
+            return self.nowTime - self.lastErrorNotifyTime
 
         print("")
-        print("Now Time: "  + time.strftime("%d-%m-%Y %I:%M:%S %p",time.localtime(self.nowTime)))
-        print("Old Time: " + time.strftime("%d-%m-%Y %I:%M:%S %p",time.localtime(self.oldTime)))
-        print("Last Error Notification: " + time.strftime("%d-%m-%Y %I:%M:%S %p",time.localtime(self.lastErrorNotifyTime)))
+        print("Now Time: \t\t\t\t\t"  + time.strftime("%d-%m-%Y %I:%M:%S %p",time.localtime(self.nowTime)))
+        print("Old Time: \t\t\t\t\t" + time.strftime("%d-%m-%Y %I:%M:%S %p",time.localtime(self.oldTime)))
+        print("Last Error Notification: \t" + time.strftime("%d-%m-%Y %I:%M:%S %p",time.localtime(self.lastErrorNotifyTime)))
+        print("-----------")
         print("tempTimeDelta: %.2f" % (tempTimeDelta))
-        print("Time Error Delta: %.2f" % (calcTimeErrorDelta()))
+       # print("Time Error Delta: %.2f" % (calcTimeErrorDelta()))
 
         # Attempt to read the power supply
         if self.pauseState == 0:
@@ -370,26 +392,26 @@ class monitorApp(tk.Frame):
                 
                 successfulRead = False
                 print("Failed to get measurment - sleeping and skipping to next iteration hoping that the problem was not fatal")
-                if self.failLast20Min == 0:
+                if self.failLastXMin == 0:
                     self.lastErrorNotifyTime = time.time()
                     print("Sending 1st Error Message")
-                    self.Notify.notify("Reading Failed", vNew, iNew, tempInfusedamtq, '', [0, 0],self.failLast20Min)
+                    self.Notify.notify("Reading Failed", vNew, iNew, tempInfusedamtq, '', [0, 0],self.failLastXMin,self.failThreshold,self.okNotifyIntervalMin)
                     now = datetime.now().strftime("%m_%d_%Y %H_%M_%S")
                     self.runLog.write(now + "\t Power Supply Read Fail\n")
                 
-                self.failLast20Min = self.failLast20Min + 1
+                self.failLastXMin = self.failLastXMin + 1
                 
                 now = datetime.now().strftime("%m_%d_%Y %H_%M_%S")
                 self.runLog.write(now + "\t Power Supply Read Failed\n")
                 
                 
                 
-                if float(calcTimeErrorDelta()/ 60) > float(self.errorNotifyInterval):
-                    self.Notify.notify("Reading Failed", vNew, iNew, tempInfusedamtq, '', [0, 0],self.failLast20Min)
+                if float(calcTimeErrorDelta()/ 60) > float(self.errorNotifyInterval) and (self.nowTime - self.lastErrorNotifyTime) / 60 >= self.errorNotifyInterval:
+                    self.Notify.notify("Reading Failed", vNew, iNew, tempInfusedamtq, '', [0, 0],self.failLastXMin,self.failThreshold,self.okNotifyIntervalMin)
                     now = datetime.now().strftime("%m_%d_%Y %H_%M_%S")
                     self.runLog.write(now + "\t Power Supply Read Fail\n")
-                if self.failLast20Min > self.failLast20Threshold:
-                    self.Notify.notify("Fail Threshold Reached", vNew, iNew, tempInfusedamtq, '', [0, 0],self.failLast20Min)
+                if self.failLastXMin > self.failThreshold and (self.nowTime - self.lastErrorNotifyTime) / 60 >= self.errorNotifyInterval:
+                    self.Notify.notify("Fail Threshold Reached", vNew, iNew, tempInfusedamtq, '', [0, 0],self.failLastXMin,self.failThreshold,self.okNotifyIntervalMin)
                     now = datetime.now().strftime("%m_%d_%Y %H_%M_%S")
                     self.runLog.write(now + "\t Power Supply Read Fail\n")
                     # NOTIFY CASE: FAIL THRESHOLD REACHED
@@ -401,38 +423,30 @@ class monitorApp(tk.Frame):
         # print("Current out of bounds? " + str(iNew < (self.iTar - self.iTar * 0.1) or iNew > (self.iTar + self.iTar * 0.1)))
 
         if successfulRead == True and self.pauseState == 0:
-            print("Checking notify cases")
-            if self.failLast20Min > self.failLast20Threshold:
+            print("CHECKING NOTIFY CASES")
+
+            if self.failLastXMin > self.failThreshold and (self.nowTime - self.lastErrorNotifyTime) / 60 >= self.errorNotifyInterval:
                 self.Notify.notify("Fail Threshold Reached", vNew, iNew, tempInfusedamtq, '', [0, 0],
-                                   self.failLast20Min)
+                                   self.failLastXMin,self.failThreshold,self.okNotifyIntervalMin)
                 now = datetime.now().strftime("%m_%d_%Y %H_%M_%S")
                 self.runLog.write(now + "\t Fail Threshold Reached\n")
 
-            if tempTimeDelta / 60 >= 20 and self.pauseState == 0:
-                self.lastStandardNotifyTime = time.time()  # Place a time new reference to create notifications from
-                self.failLast20Min = 0
-                self.Notify.notify("Standard", vNew, iNew, tempInfusedamtq, '', [0, 0], self.failLast20Min)
-
-                now = datetime.now().strftime("%m_%d_%Y %H_%M_%S")
-                self.runLog.write(now + "\t Standard Notification Sent\n")
-
                 # NOTIFY CASE: STANDARD CASE
-
             if tempTimeDelta / 60 >= self.okNotifyIntervalMin and self.pauseState == 0:
-                self.lastStandardNotifyTime = time.time()
-                # NOTIFY CASE: STANDARD 20 MIN
-                self.Notify.notify("Standard", vNew, iNew, tempInfusedamtq, '', [0, 0], self.failLast20Min)
-                self.failLast20Min = 0
+                self.lastStandardNotifyTime = time.time()  # Place a time new reference to create notifications from
+                self.failLastXMin = 0
+                self.Notify.notify("Standard", vNew, iNew, tempInfusedamtq, '', [0, 0], self.failLastXMin,self.failThreshold,self.okNotifyIntervalMin)
+
                 now = datetime.now().strftime("%m_%d_%Y %H_%M_%S")
                 self.runLog.write(now + "\t Standard Notification Sent\n")
 
             if vNew > self.vHigh or vNew < self.vLow:
-                if self.failLast20Min == 0:  # Send a notification error for the first time in 20 minutes regardless
+                if self.failLastXMin == 0:  # Send a notification error for the first time in 20 minutes regardless
                     # NOTIFY CASE: VOLTAGE OUT OF BOUNDS
                     self.lastErrorNotifyTime = time.time()
                     print("Sending 1st Out of Bounds Message")
                     self.Notify.notify("Voltage Out of Bounds", vNew, iNew, tempInfusedamtq, '', [0, 0],
-                                       self.failLast20Min)
+                                       self.failLastXMin,self.failThreshold,self.okNotifyIntervalMin)
                     now = datetime.now().strftime("%m_%d_%Y %H_%M_%S")
                     self.runLog.write(now + "\t Voltage Out of Bounds: 1st in 20 min.\n")
 
@@ -441,34 +455,34 @@ class monitorApp(tk.Frame):
                     # NOTIFY CASE: VOLTAGE OUT OF BOUNDS
                     print("Sending 2nd+ Out of Bounds Message")
                     self.Notify.notify("Voltage Out of Bounds", vNew, iNew, tempInfusedamtq, '', [0, 0],
-                                       self.failLast20Min)
+                                       self.failLastXMin,self.failThreshold,self.okNotifyIntervalMin)
                     self.lastErrorNotifyTime = time.time()
 
                     now = datetime.now().strftime("%m_%d_%Y %H_%M_%S")
                     self.runLog.write(now + "\t Voltage Out of Bounds: Repeated in 20 min.\n")
 
                     pass
-                self.failLast20Min = self.failLast20Min + 1
+                self.failLastXMin = self.failLastXMin + 1
 
             if iNew < (self.iTar - self.iTar * 0.1) or iNew > (self.iTar + self.iTar * 0.1):
                 print("Current out of Range")
                 self.lastErrorNotifyTime = time.time()
-                if self.failLast20Min == 0:
+                if self.failLastXMin == 0:
                     # NOTIFY CASE: CURRENT OUT OF BOUNDS
                     self.lastErrorNotifyTime = time.time()
                     self.Notify.notify("Current outside range", vNew, iNew, tempInfusedamtq, '', [0, 0],
-                                       self.failLast20Min)
+                                       self.failLastXMin,self.failThreshold,self.okNotifyIntervalMin)
                     pass
                 if (self.nowTime - self.lastErrorNotifyTime) / 60 >= self.errorNotifyInterval:
                     # NOTIFY CASE: CURRENT OUT OF BOUNDS
                     self.lastErrorNotifyTime = time.time()
                     self.Notify.notify("Current outside range", vNew, iNew, tempInfusedamtq, '', [0, 0],
-                                       self.failLast20Min)
+                                       self.failLastXMin,self.failThreshold,self.okNotifyIntervalMin)
                     pass
-                self.failLast20Min = self.failLast20Min + 1
+                self.failLastXMin = self.failLastXMin + 1
 
         print("Time since last error message (sec): %.2f" %(calcTimeErrorDelta()))
-        print("Fail last %s min: %s" % (self.okNotifyIntervalMin, self.failLast20Min))
+        print("Fail last %s min: %s" % (self.okNotifyIntervalMin, self.failLastXMin))
 
         # RUN IF COPPER ONLY. TURN OFF FOR PERMALLOY
         # Assumption: Infusion time is max 5 seconds (to not break power supply checking interval)
@@ -521,16 +535,26 @@ class monitorApp(tk.Frame):
                     print("# infusions: ", len(self.sp.infusion_list))
 
         ## Add the new voltage and current readings into the plot
+        # There appears to be two graphs open when only plotting the voltage and current, not sure what calls the other
+
         plt.ion()
         self.tPlot.append(toPlotTime)
         self.aPlot.append(vNew)
         self.bPlot.append(iNew)
-        self.line1.set_data(self.tPlot, self.aPlot)
-        self.line2.set_data(self.tPlot, self.bPlot)
-        plt.draw()
-        #self.figure.draw()
-        self.figure.gca().relim()
-        self.figure.gca().autoscale_view()
+
+        self.v_axes.clear()
+        self.i_axes.clear()
+
+        self.v_axes.plot(self.tPlot,self.aPlot,marker=".",markersize=10,markerfacecolor="black",markeredgecolor="black")
+        self.i_axes.plot(self.tPlot,self.bPlot,marker=".",markersize=10,markerfacecolor="black",markeredgecolor="black")
+
+        if self.platingType == "PERMALLOY" and self.useSolenoidandOxy == True:
+            self.oxyPlot.append(newO2)
+
+        self.fig.canvas.draw()
+        self.fig.canvas.flush_events()
+        self.fig.gca().relim()
+        self.fig.gca().autoscale_view()
         
         try:
              # total elapsed time in hh:mm:ss
@@ -544,7 +568,6 @@ class monitorApp(tk.Frame):
             time_axis_title = "Time (s)"
         plt.legend(['Voltage', 'Current'])
         plt.xlabel(time_axis_title)
-        plt.show()
 
         ## Wait 5 seconds (or probably change depending on the entry to the power supply checking interval) then run again
         print("Looped\n\n")

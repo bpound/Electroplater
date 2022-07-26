@@ -13,56 +13,56 @@ class E3631A_PS():
         self.ident = ps_ident
 
         # open up Resource Manager
-        rm = pyvisa.ResourceManager('@py')
+        # rm = pyvisa.ResourceManager('@py')
 
         # open up the right channel
         # the USB resource needs to be figured out beforehand, there is no way to figure out which power supply is
 
-        # self.startI = -8
-        # self.startV = -8
+        self.startI = -8
+        self.startV = -8
 
-        try:
-            ps = rm.open_resource(ps_port)
-
-            # set address and protocol
-            ps.write('++addr %i' % channel)
-            ps.write('++eos 0')
-            time.sleep(0.01)
-
-            # try to get a response from power supply, in this case its identity
-            ps.write('*IDN?')
-            ps.write('++read')
-            print('Power supply identity: %s , %s' % (ps_port, ps.read().strip()))
-
-            # save communication instance into class variable
-            self.ps = ps
-        except:
-            print('Something went wrong with power supply initialization.')
-            self.ps = None
+        # try:
+        #     ps = rm.open_resource(ps_port)
+        #
+        #     # set address and protocol
+        #     ps.write('++addr %i' % channel)
+        #     ps.write('++eos 0')
+        #     time.sleep(0.01)
+        #
+        #     # try to get a response from power supply, in this case its identity
+        #     ps.write('*IDN?')
+        #     ps.write('++read')
+        #     print('Power supply identity: %s , %s' % (ps_port, ps.read().strip()))
+        #
+        #     # save communication instance into class variable
+        #     self.ps = ps
+        # except:
+        #     print('Something went wrong with power supply initialization.')
+        #     self.ps = None
 
     def run(self, V, I):
 
         # if self.ps is not None:
 
-        # self.startI = I
-        # self.startV = V
-        #
-        # self.lastI = self.startI
-        # self.lastV = self.startV
+        self.startI = I
+        self.startV = V
+
+        self.lastI = self.startI
+        self.lastV = self.startV
 
         # take output off, set new voltage and current, then turn output back on
-        self.ps.write('OUTPUT OFF')
-        self.ps.write('APPL P6V, %f, %f' % (V, I)) # Want to change the power supply to run at 25V at some point for better current. May need to look at the documentation
-
-        # check if output is already on
-        self.ps.write('OUTPUT?')
-        self.ps.write('++read')
-        on_flag = self.ps.read().strip()
-
-        if on_flag == '0':
-            self.ps.write('OUTPUT ON')
-
-        print('Started power supply output.')
+        # self.ps.write('OUTPUT OFF')
+        # self.ps.write('APPL P6V, %f, %f' % (V, I)) # Want to change the power supply to run at 25V at some point for better current. May need to look at the documentation
+        #
+        # # check if output is already on
+        # self.ps.write('OUTPUT?')
+        # self.ps.write('++read')
+        # on_flag = self.ps.read().strip()
+        #
+        # if on_flag == '0':
+        #     self.ps.write('OUTPUT ON')
+        #
+        # print('Started power supply output.')
 
     # else:
     #     print('Cannot run power supply; power supply did not initialize properly.')
@@ -70,22 +70,22 @@ class E3631A_PS():
     def read_V_I(self):
 
         if self.ps is not None:
-            # V_vary = random.uniform(-0.05, 0.05)
-            # I_vary = random.uniform(-1, 1)
+            V_vary = random.uniform(-0.05, 0.05)
+            I_vary = random.uniform(-1, 1)
 
             # # query power supply for voltage
-            self.ps.write('MEAS:VOLT? P6V')
-            self.ps.write('++read')
-            voltage = float(self.ps.read().strip())
-
-            # query power supply for current
-            self.ps.write('MEAS:CURR? P6V')
-            self.ps.write('++read')
-            current = float(self.ps.read().strip())
+            # self.ps.write('MEAS:VOLT? P6V')
+            # self.ps.write('++read')
+            # voltage = float(self.ps.read().strip())
+            #
+            # # query power supply for current
+            # self.ps.write('MEAS:CURR? P6V')
+            # self.ps.write('++read')
+            # current = float(self.ps.read().strip())
 
             # From Simulations
-            # voltage = self.lastV + V_vary
-            # current = self.lastI + I_vary
+            voltage = self.lastV + V_vary
+            current = self.lastI + I_vary
 
             self.lastV = voltage
             self.lastI = current

@@ -63,12 +63,12 @@ from tkinter import scrolledtext
 # use powerSupplies for software (simulation)
 
 import ToolTipStuff
-import powerSuppliesHard as powerSupplies
-import OPS
+import powerSupplies as powerSupplies
+import OPS_Sim as OPS
 import NotifyClass
 import monitor as monitor
 
-screenshotPath = "/home/pi/Desktop/download.jpeg"
+screenshotPath = "C:\\Users\\Thomas\\Pictures"
 pathToLogs = "/home/pi/Electroplating/logFiles"
 '''
 Class Order:
@@ -84,9 +84,9 @@ def testEmail(Notify):
     # fn = os.getcwd() + '/screenshot.png'
     # os.system('scrot %s -q 75' % fn)    
 
-    pathToScreenshot = "/home/pi/Desktop"
-    pathToLogs = "/home/pi/Electroplating/logFiles"
-    nameScreenshot = "download.jpeg"
+    pathToScreenshot = "C:\\Users\\Thomas\\Pictures"
+    pathToLogs = "D:\\Files\\electro\\Logs"
+    nameScreenshot = "platingCheck.png"
     img1 = dict(title='desktop screenshot', path=os.path.join(pathToScreenshot, nameScreenshot))
 
     try:
@@ -163,6 +163,8 @@ def menu():
     notify_interval_def = 1.0
     # how often to notify if bad in minutes
     error_notify_interval_def = 1.0
+
+    fail_threshold_def = 20
 
     DEFVALUES = [volt_def[0],volt_def[1],volt_def[2],cur_def,
                  infuse_rate_def,infuse_interval_def,num_times_to_check_def,
@@ -579,6 +581,7 @@ def menu():
     checkInterval = tk.StringVar(SMSFrame, check_interval_def)
     notifyTimer = tk.StringVar(SMSFrame, notify_interval_def)
     errorNotify = tk.StringVar(SMSFrame, error_notify_interval_def)
+    failThreshold = tk.StringVar(SMSFrame,fail_threshold_def)
 
     checkIntervalLabel = tk.Label(SMSFrame, text="Power Supply\n Checking Interval (s.)")
     checkIntervalLabel.grid(row=0, column=0, padx=gridPadDef[0])
@@ -587,19 +590,26 @@ def menu():
                                           "Sets amount of time between each check of voltage and current, in seconds")
     checkIntervalEntry.grid(row=0, column=1, padx=gridPadDef[0], pady=gridPadDef[1])
 
-    notifyTimerLabel = tk.Label(SMSFrame, text="Failure Count Interval (min.)")
-    notifyTimerLabel.grid(row=1, column=0, padx=gridPadDef[0])
+    failThresholdLabel = tk.Label(SMSFrame, text="Error Threshold")
+    failThresholdLabel.grid(row=1, column=0, padx=gridPadDef[0])
+    failThresholdEntry = tk.Entry(SMSFrame, width=8, textvariable=failThreshold, justify="center")
+    failThresholdEntryTip = ToolTipStuff.CreateToolTip(failThresholdEntry, \
+                                        "Sets how many errors until the monitor states that there have been too many")
+    failThresholdEntry.grid(row=1, column=1, padx=gridPadDef[0], pady=gridPadDef[1])
+
+    notifyTimerLabel = tk.Label(SMSFrame, text="Error Threshold Interval (min.)")
+    notifyTimerLabel.grid(row=2, column=0, padx=gridPadDef[0])
     notifyTimerEntry = tk.Entry(SMSFrame, width=8, textvariable=notifyTimer, justify="center")
     notifyTimerEntryTip = ToolTipStuff.CreateToolTip(notifyTimerEntry, \
-                                        "Sets the interval of time that we count how many errors occur during Electroplating (Smaller numbers = More emails about errors)")
-    notifyTimerEntry.grid(row=1, column=1, padx=gridPadDef[0], pady=gridPadDef[1])
+                                        "Sets the interval of time that we count how many errors occur during Electroplating (X errors in Y min.)")
+    notifyTimerEntry.grid(row=2, column=1, padx=gridPadDef[0], pady=gridPadDef[1])
 
-    errorNotifyLabel = tk.Label(SMSFrame, text="Error Notification Interval (min.)")
-    errorNotifyLabel.grid(row=2, column=0, padx=gridPadDef[0])
+    errorNotifyLabel = tk.Label(SMSFrame, text="Time Between Error Emails (min.)")
+    errorNotifyLabel.grid(row=3, column=0, padx=gridPadDef[0])
     errorNotifyEntry = tk.Entry(SMSFrame, width=8, textvariable=errorNotify, justify="center")
     errorNotifyEntryTip = ToolTipStuff.CreateToolTip(errorNotifyEntry, \
                                         "Sets how often to send an email when the system meets an error to prevent spam.")
-    errorNotifyEntry.grid(row=2, column=1, padx=gridPadDef[0], pady=gridPadDef[1])
+    errorNotifyEntry.grid(row=3, column=1, padx=gridPadDef[0], pady=gridPadDef[1])
 
     emailTestButton = tk.Button(testButtonFrame, bd=2, text="Test Email Protocol", padx=buttonDef[0], pady=buttonDef[1],
                                     width=buttonDef[2], height=buttonDef[3])
@@ -713,12 +723,7 @@ def menu():
         plt.ion()
 
         tPlot, aPlot, bPlot = [], [], []
-        figure = plt.figure()
-
-        ax = figure.add_subplot(111)
-
-        line1, = ax.plot(tPlot, aPlot, '-')
-        line2, = ax.plot(tPlot, bPlot, '-')
+        fig,[V_axes,I_axes] = plt.subplots(2,1)
 
         while nowTime - startTime <= 10:
             nowTime = time.time()
@@ -747,14 +752,18 @@ def menu():
             except:
                 time_axis_title = "Time (s)"
 
-            line1.set_data(tPlot, aPlot)
-            line2.set_data(tPlot, bPlot)
+            V_axes.clear();
+            V_axes.plot(tPlot, aPlot,marker=".",markersize=10,markerfacecolor="black",markeredgecolor="black")
+            I_axes.clear();
+            I_axes.plot(tPlot, bPlot,marker=".",markersize=10,markerfacecolor="black",markeredgecolor="black")
+            #line1.set_data(tPlot, aPlot)
+            # line2.set_data(tPlot, bPlot)
 
-            figure.canvas.draw()
-            figure.canvas.flush_events()
+            fig.canvas.draw()
+            fig.canvas.flush_events()
 
-            figure.gca().relim()
-            figure.gca().autoscale_view()
+            fig.gca().relim()
+            fig.gca().autoscale_view()
 
             plt.legend(['Voltage', 'Current'])
             plt.xlabel(time_axis_title)
@@ -773,17 +782,21 @@ def menu():
 
         ax = figure.add_subplot(111)
 
+        solenoidState = "Closed"
+
         line1, = ax.plot(tPlot, aPlot, '-')
         while nowTime - startTime <= 300:
             nowTime = time.time()
-            vNew,oNew = OxySensorObject.read_O2_conc()
+            vNew,oNew = OxySensorObject.read_O2_conc(solenoidState)
 
             if oNew > solenoid_high_bound_def:
                 print("O2 Higher than " + str(solenoid_high_bound_def) + ", Solenoid Closed")
                 SolenoidObject.open_solenoid()
+                solenoidState = "Open"
             if oNew < solenoid_low_bound_def:
                 print("O2 Lower than " + str(solenoid_low_bound_def) + ", Solenoid Opened")
                 SolenoidObject.close_solenoid()
+                solenoidState = "Closed"
 
 #             except:
 #                 print("ERROR: Could not read the 02 Sensor for 10 seconds continuously.")
@@ -874,6 +887,13 @@ def menu():
         notifyTimerEntry['state'] = tk.DISABLED
         errorNotifyEntry['state'] = tk.DISABLED
         timesToCheckEntry['state'] = tk.DISABLED
+        failThresholdEntry['state'] = tk.DISABLED
+
+        solenoidLowBox['state'] = tk.DISABLED
+        solenoidHighBox['state'] = tk.DISABLED
+
+
+        plateOption['state'] = tk.DISABLED
 
         # If we have
         monitorAppObject[0].startMonitor()
@@ -894,6 +914,12 @@ def menu():
         notifyTimerEntry['state'] = tk.NORMAL
         errorNotifyEntry['state'] = tk.NORMAL
         timesToCheckEntry['state'] = tk.NORMAL
+        failThresholdEntry['state'] = tk.NORMAL
+
+        solenoidLowBox['state'] = tk.NORMAL
+        solenoidHighBox['state'] = tk.NORMAL
+
+        plateOption['state'] = tk.NORMAL
 
         monitorAppObject[0].stopMonitor()
 
@@ -983,6 +1009,7 @@ def menu():
                                       float(solenoidHighBox.get()),
                                       float(notifyTimerEntry.get()),
                                       float(errorNotifyEntry.get()),
+                                      float(failThresholdEntry.get()),
                                       plateOptionVar.get(),
                                       solenoidOn.get())
         print("Updated monitorApp")
@@ -1020,6 +1047,7 @@ def menu():
     checkIntervalEntry.bind('<FocusOut>', lambda event: checkInput(checkIntervalEntry,9), add="+")
     notifyTimerEntry.bind('<FocusOut>', lambda event: checkInput(notifyTimerEntry,10), add="+")
     errorNotifyEntry.bind('<FocusOut>', lambda event: checkInput(errorNotifyEntry,11), add="+")
+    failThresholdEntry.bind('<FocusOut>', lambda event: checkInput(errorNotifyEntry,13), add="+")
 
     oxyNumReadsBox.bind('<FocusOut>', lambda event: checkInput(oxyNumReadsBox,12), add="+")
 

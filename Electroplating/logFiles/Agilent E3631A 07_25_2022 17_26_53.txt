@@ -1,0 +1,11 @@
+### ELECTROPLATING PARAMETERS ###
+#Plating Start Time (month_day_year hr_min_sec): 	07_25_2022 17_26_53
+#Power Supply: 		Agilent E3631A
+#Max Voltage: 		18
+#Set Current: 		0.35
+#N2 Purge (Use Solenoid)?: 		
+
+
+07_25_2022 17_26_53	 Power Supply Queried	 V: 6.027332780671255	 I: 1.2223252869828558
+07_25_2022 17_27_00	 Power Supply Queried	 V: 5.996092147730206	 I: 1.30233247247136
+07_25_2022 17_27_05	 Power Supply Queried	 V: 5.992789409984038	 I: 1.2642285581184303

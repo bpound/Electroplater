@@ -95,11 +95,12 @@ class E3631A_PS():
         return voltage, current
 
     def stop(self):
-        if self.ps is not None:
-            self.ps.write('OUTPUT OFF')
-            print('Power supply is turned off.')
-        else:
-            print('Power supply did not initialize properly, so it cannot be turned off if on.')
+        print("Power supply is turned off")
+        # if self.ps is not None:
+        #     self.ps.write('OUTPUT OFF')
+        #     print('Power supply is turned off.')
+        # else:
+        #     print('Power supply did not initialize properly, so it cannot be turned off if on.')
 
     def disconnect(self):
         if self.ps is not None:

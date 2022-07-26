@@ -89,8 +89,8 @@ class NotifyCSingle():
         self.toEmail = ["spokosison@gmail.com"]
         self.pathToScreenshot = "/home/pi/Desktop"
         self.nameScreenshot = 'download.jpeg' #Note that this needs to be mapped to the desktop screenshot
-        self.pathToCredentials = "/home/pi/Desktop/credentials.json"
-        self.dirToPickle = "/home/pi/Desktop"
+        self.pathToCredentials = "C:\\Users\\Thomas\\Desktop\\credentials.json"
+        self.dirToPickle = "C:\\Users\\Thomas\\Desktop"
 
     # Create googleEmailAPI functions for message protocol. Won't need to be used outside of this class? (Hopefully)
     def get_service(self, pathToCredentials, dirToPickle):
@@ -205,7 +205,7 @@ class NotifyCSingle():
         return
 
     # Probably where most of the things will need to be changed
-    def notify(self, case, vNew, iNew, infused_amt_q, msg, notify_list, failLast20):
+    def notify(self, case, vNew, iNew, infused_amt_q, msg, notify_list, failLast20,failThreshold,failInterval):
         '''
 
         :param V_new:
@@ -254,22 +254,28 @@ class NotifyCSingle():
         # Creates a txt log of the current message as well and saves it to a folder.
 
         if case == "Standard":
-            emailBody = '%s. Good.%s V: %.3f V, I: %.3f .A Inf: %.3f uL. Fails Last 20 minutes: %.3f' % (
-                current_date_time, self.msg, vNew, iNew, infused_v1, failLast20)
+            emailBody = '%s. Good.%s V: %.3f V, I: %.3f .A Inf: %.3f uL. Fails Last %.1f minutes: %.3f' % (
+                current_date_time, self.msg, vNew, iNew, infused_v1,failInterval, failLast20)
+            subject = "Operation Normal"
             pass
         if case == "Voltage Out of Bounds":
             emailBody = '%s. Voltage Out of Bounds.%s V: %.3f V, I: %.3f .A Inf: %.3f uL.' % (
                 current_date_time, self.msg, vNew, iNew, infused_v1)
+            subject = "Voltage Out of Bounds"
             pass
         if case == "Current outside range":
             emailBody = '%s. Current Out of Range.%s V: %.3f V, I: %.3f .A Inf: %.3f uL.' % (
                 current_date_time, self.msg, vNew, iNew, infused_v1)
+            subject = "Current Outside Range"
             pass
         if case == "Reading Failed":
             emailBody = '%s. ERROR-%s. Warn %d. V: %.3f V, I: %.3f A. Inf: %.0f uL.' % (
                 current_date_time, self.msg, self.error_notify_count, vNew, iNew, infused_v1)
+            subject = "Reading Failed"
         if case == "Fail Threshold Reached":
-            emailBody = "Reached more than 20 errors in the last 20 minutes. Most likely due to a problem with the power supply at this point"
+            # Make x and y variables from the monitor
+            emailBody = "Reached more than %d errors in the last %d minutes. Most likely due to a problem with the power supply at this point" % (failThreshold,failInterval)
+            subject = "Fail Threshold Reached"
             pass
 
 
@@ -284,18 +290,26 @@ class NotifyCSingle():
         #     except:
         #         print("Could not send text message notification, going to hope that the error was not fatal")
 
+
         #Get a screenshot the the system?
         #fn = os.getcwd() + '/screenshots/screenshot.png'
         if os.path.exists("/home/pi/Electroplating/screenshots/screenshot.png"):
             os.remove("/home/pi/Electroplating/screenshots/screenshot.png")
         
-        os.system('scrot -q 75 /home/pi/Electroplating/screenshots/screenshot.png')
+       # os.system('scrot -q 75 /home/pi/Electroplating/screenshots/screenshot.png')
         
        #pyautogui.screenshot().save(r'/home/pi/Electroplating/screenshots/screenshot.png')
-        
-        pathToScreenshot = "/home/pi/Electroplating/screenshots"
+
+        #Hardcoded Screenshot for Raspberry Pi
+        #pathToScreenshot = "/home/pi/Electroplating/screenshots"
+        #nameScreenshot = "screenshot.png"
+        #img1 = dict(title='desktop screenshot', path=os.path.join(pathToScreenshot, nameScreenshot))
+
+        #Hardcoded screenshot for Windows PC
+        pathToScreenshot = "C:\\Users\\Thomas\\PycharmProjects\\pythonProject\\venv\\Electroplating\\screenshots"
         nameScreenshot = "screenshot.png"
         img1 = dict(title='desktop screenshot', path=os.path.join(pathToScreenshot, nameScreenshot))
+
 
         try:
             service = self.get_service(self.pathToCredentials, self.dirToPickle)
@@ -303,7 +317,7 @@ class NotifyCSingle():
             print("Could not establish service")
             return
         try:
-            message = self.create_message(self.fromEmail, self.toEmail, "Test subject", emailBody, img1)
+            message = self.create_message(self.fromEmail, self.toEmail, subject, emailBody, img1)
         except:
             print("Could not create the email message")
         try:
